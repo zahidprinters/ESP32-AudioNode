@@ -16,6 +16,10 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
+#include "lwip/sockets.h"
+
+#define PC_SERVER_IP   "<pc-ip>"
+#define PC_SERVER_PORT 1234
 
 
 #define PIN_BCLK   4
@@ -139,6 +143,38 @@ void audio_pump_task(void *arg)
     }
 }
 
+/* M2: TCP client — board connects TO the PC (server waits in accept()) */
+static void tcp_task(void *arg)
+{
+    while (1) {
+        struct sockaddr_in dest = {0};
+        dest.sin_addr.s_addr = inet_addr(PC_SERVER_IP);
+        dest.sin_family = AF_INET;
+        dest.sin_port = htons(PC_SERVER_PORT);
+
+        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+        if (sock < 0) { printf("tcp: socket failed\n"); vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
+
+        printf("tcp: connecting to %s:%d ...\n", PC_SERVER_IP, PC_SERVER_PORT);
+        if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) == 0) {
+            printf("tcp: CONNECTED to %s:%d\n", PC_SERVER_IP, PC_SERVER_PORT);
+            /* M2 scope: hold connection, log every 10s; recv drains any data */
+            uint8_t tmp[512];
+            int up = 0;
+            while (1) {
+                int len = recv(sock, tmp, sizeof(tmp), MSG_DONTWAIT);
+                if (len < 0 && errno != EAGAIN && errno != EWOULDBLOCK) { printf("tcp: recv err, reconnect\n"); break; }
+                if (++up >= 10) { up = 0; printf("tcp: alive\n"); }
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+        } else {
+            printf("tcp: connect failed (errno=%d), retry\n", errno);
+        }
+        close(sock);
+        vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
 void app_main(void)
 {
     printf("M1: wifi + tone test start\n");
@@ -165,4 +201,5 @@ void app_main(void)
     wifi_init();
     printf("wifi connected, power-save OFF\n");
     xTaskCreate(rssi_task, "rssi", 3072, NULL, 3, NULL);
+    xTaskCreate(tcp_task, "tcp", 4096, NULL, 4, NULL);
 }
