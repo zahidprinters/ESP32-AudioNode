@@ -58,11 +58,13 @@ def stream_mode(port, seconds, freq, vol):
     s.listen(1)
     print(f"listening on 0.0.0.0:{port} — waiting for board...")
     conn, addr = s.accept()
-    print(f"ACCEPTED connection from {addr[0]}:{addr[1]} — streaming {freq}Hz for {seconds}s")
-    chunk_samples = 1024
-    start = 0
+    print(f"ACCEPTED connection from {addr[0]}:{addr[1]} at t={time.time():.2f} — streaming {freq}Hz for {seconds}s", flush=True)
+    print(f"sent first chunk t={time.time():.2f}", flush=True)
+    conn.sendall(make_tone_chunk(freq, vol, 0, 1024))
+    start = 1024
+    sent = 2048
     t0 = time.time()
-    sent = 0
+    chunk_samples = 1024
     try:
         while (time.time() - t0) < seconds:
             chunk = make_tone_chunk(freq, vol, start, chunk_samples)
@@ -74,7 +76,7 @@ def stream_mode(port, seconds, freq, vol):
             lag = target - (time.time() - t0)
             if lag > 0:
                 time.sleep(lag)
-            print(f"sent {sent} bytes ({sent/(2*SR):.1f}s of audio)", end="\r")
+            print(f"sent {sent} bytes ({sent/(2*SR):.1f}s of audio) t={time.time():.2f}")
         print(f"\ndone: sent {sent} bytes in {time.time()-t0:.1f}s")
     except (BrokenPipeError, ConnectionResetError) as e:
         print(f"\nconnection lost: {e}")

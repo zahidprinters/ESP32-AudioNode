@@ -7,20 +7,20 @@
 ---
 
 ## 1. WHERE WE ARE (current focus)
-- Phase: **M0 serial tone test — running on board, awaiting audio verification**
-- Current task: user confirms tone is audible/clean (ear + PC mic)
-- Last action: fixed TWDT spin (rate-limited pump task + 48-sample sine table), built+flashed, monitor clean (no WDT, no write errors)
-- Next step: on user confirmation → mark M0 ✅ → git commit → M1 WiFi
-- Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\tools` — NOTE: export.bat does NOT work (EIM install); use `D:\esp-idf\env.ps1` (canonical env script).
+- Phase: **M3 streaming — data path verified end-to-end (2.88MB / 30s clean); awaiting user audio confirmation**
+- Current task: user confirms 1kHz tone heard for 30s during test, then silence
+- Last action: fixed ghost-connection race (5s boot delay + server-after-monitor in harness); full stream verified in monitor log
+- Next step: on user confirmation → mark M3 ✅ → commit → then robustness/noise passes
+- Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\tools` — export.bat does NOT work (EIM install); use `D:\esp-idf\env.ps1`.
 
 ## 2. FEATURE MAP (what exists / what's left)
 | Feature | Status | Where | Notes |
 |---|---|---|---|
-| Project scaffold (CMake, main, sdkconfig) | ✅ DONE | `audio_node/` | esp32s3 target, builds with IDF v6.1 |
-| M0: Serial tone test (I2S direct, no network) | 🔨 ON BOARD — verifying | `audio_node/main/main.c` | 1kHz tone, pump task rate-limited |
-| M1: WiFi connect (power-save OFF) | ⬜ TODO | — | — |
-| M2: TCP client → PC server <pc-ip>:1234 | ⬜ TODO | — | board = client |
-| M3: Raw PCM TCP stream playback + jitter buffer (PSRAM) | ⬜ TODO | — | 48k/16bit/MONO |
+| Project scaffold (CMake, main, sdkconfig) | ✅ DONE | `audio_node/` | esp32s3 target, builds with IDF v6.1, PSRAM octal enabled |
+| M0: Serial tone test (I2S direct, no network) | ✅ DONE | `main/main.c` | 1kHz tone clean (user verified by ear) |
+| M1: WiFi connect (power-save OFF) | ✅ DONE | `main/main.c` | IP <board-ip>, RSSI -34..-38, stable 65s |
+| M2: TCP client → PC server | ✅ DONE | `main/main.c` + `server/send_pcm.py` | accept + connection held (verified both sides) |
+| M3: Raw PCM TCP stream + PSRAM jitter buffer | 🔨 data verified, awaiting audio OK | `main/main.c` | 2,881,536 bytes / 30s clean, stream end clean |
 | PC-side test sender (Python, TCP) | ⬜ TODO | `server/` | — |
 | Stream-end flush (audio stops promptly) | ⬜ TODO | — | — |
 
@@ -40,6 +40,12 @@
 | 3 | 2026-09-08 | `ERROR: COM3 failed to connect` | `idf.py flash` without -p auto-picked COM3 (Intel AMT!) | Always pass `-p COM5` | ✅ works |
 | 4 | 2026-09-08 | `Could not open COM5 ... PermissionError(13)` | stale monitor python process held port | Kill stray python processes before flash | ✅ works |
 | 5 | 2026-09-08 | `task_wdt: IDLE0 not reset` + backtrace in pump loop | tone loop blocked forever in app_main then spun on CPU0 | Moved pump to dedicated task with `vTaskDelay(4ms)` rate-limit + error-checked writes + precomputed 48-sample sine table | ✅ monitor clean |
+| 6 | 2026-09-08 | `implicit declaration of sinf` / `M_PI undeclared` | lost `#include <math.h>` when adding WiFi includes | Re-added include | ✅ |
+| 7 | 2026-09-08 | `ninja: fatal: ReadFile: The handle is invalid.` | launching build detached via Start-Process broke stdio handles | Run builds synchronously in foreground | ✅ |
+| 8 | 2026-09-08 | `WARNING: PSRAM alloc failed` | N8R2 octal PSRAM not enabled by default sdkconfig | Added `sdkconfig.defaults` (SPIRAM=y, MODE_OCT, 8MB flash); delete sdkconfig + set-target to regenerate | ✅ PSRAM alloc OK |
+| 9 | 2026-09-08 | build targeted **esp32** (not s3!) | deleted sdkconfig but ran build without set-target | Always run set-target after deleting sdkconfig | ✅ |
+| 10 | 2026-09-08 | PC `10054` + board `recv err errno=104 after 0 bytes` | ghost/stale connection from previous board boot accepted by fresh server (race: server started while board was mid-retry from dead session) | Board: 5s delay before first connect; harness: start monitor BEFORE server; kill orphan pythons between tests | ✅ full 30s stream clean |
+| 11 | 2026-09-08 | zombie python processes survive test harness | Stop-Process kills wrapper pwsh, not python children | harness kills all python after test; kill pythons before each test | ✅ |
 
 ## 6. DECISIONS & REASONS
 | Decision | Reason |
