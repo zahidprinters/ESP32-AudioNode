@@ -6,8 +6,19 @@
 
 # ESP32 AUDIO NODE — ESSENTIALS (single source of truth)
 
-> Fresh start: everything is built from scratch in this workspace (`D:\esp-idf`).
-> No legacy project paths or old code references.
+## ESP-IDF (installed, use this — not Arduino)
+- **IDF v6.1 at `D:\esp32\v6.1\esp-idf`** (current, verified)
+- Tools/env at `C:\Espressif\tools` (v6.1: xtensa-esp-elf, python venv v6.1)
+- Build commands (run in cmd):
+  call D:\esp32\v6.1\esp-idf\export.bat
+  cd /d d:\esp-idf\audio_node
+  idf.py set-target esp32s3
+  idf.py build
+  idf.py -p COM5 flash        (if it can't connect: hold BOOT, tap RESET, release BOOT)
+  idf.py -p COM5 monitor --no-reset
+- COM5 = board (USB Serial Device). COM3 = Intel AMT motherboard port — NEVER use.
+- Board quirk: USB CDC console sometimes dies after flashing → unplug/replug USB fixes it.
+  If board shows "waiting for download" → unplug/replug USB (no buttons).
 
 ## Hardware
 - Board: ESP32-S3-DevKitC-1-N8R2 (8MB flash, 8MB octal PSRAM)
@@ -32,19 +43,6 @@
 - Board IP: <board-ip> (RSSI -32..-40 dBm = excellent)
 - PC (server) IP: <pc-ip>, TCP port 1234 (firewall rules exist)
 - Board connects TO the PC (client mode), sender waits in accept()
-
-## ESP-IDF (installed, use this — not Arduino)
-- IDF v5.3.2 at `D:\esp32-tools\esp-idf`
-- Tools/env at `C:\Users\PC\.espressif`
-- Build commands (run in cmd):
-  call D:\esp32-tools\esp-idf\export.bat
-  cd /d "d:\esp-idf\<project_dir>"
-  idf.py set-target esp32s3
-  idf.py build
-  idf.py -p COM5 flash        (if it can't connect: hold BOOT, tap RESET, release BOOT)
-  idf.py -p COM5 monitor --no-reset
-- Board quirk: USB CDC console sometimes dies after flashing → unplug/replug USB fixes it.
-  If board shows "waiting for download" → unplug/replug USB (no buttons).
 
 ## Proven facts (do not re-litigate)
 - Max98357A needs no MCLK; SD HIGH = enabled; VIN on 5V

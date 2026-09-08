@@ -7,16 +7,17 @@
 ---
 
 ## 1. WHERE WE ARE (current focus)
-- Phase: **Not started** (workspace is clean, fresh start)
-- Current task: none — awaiting first task
-- Last action: created project state + workflow system files
-- Next step: scaffold ESP-IDF project, then M0 serial tone test
+- Phase: **M0 serial tone test — running on board, awaiting audio verification**
+- Current task: user confirms tone is audible/clean (ear + PC mic)
+- Last action: fixed TWDT spin (rate-limited pump task + 48-sample sine table), built+flashed, monitor clean (no WDT, no write errors)
+- Next step: on user confirmation → mark M0 ✅ → git commit → M1 WiFi
+- Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\tools` — NOTE: export.bat does NOT work (EIM install); use `D:\esp-idf\env.ps1` (canonical env script).
 
 ## 2. FEATURE MAP (what exists / what's left)
 | Feature | Status | Where | Notes |
 |---|---|---|---|
-| Project scaffold (CMake, main, sdkconfig) | ⬜ TODO | — | — |
-| M0: Serial tone test (I2S direct, no network) | ⬜ TODO | — | first milestone — proves amp+I2S |
+| Project scaffold (CMake, main, sdkconfig) | ✅ DONE | `audio_node/` | esp32s3 target, builds with IDF v6.1 |
+| M0: Serial tone test (I2S direct, no network) | 🔨 ON BOARD — verifying | `audio_node/main/main.c` | 1kHz tone, pump task rate-limited |
 | M1: WiFi connect (power-save OFF) | ⬜ TODO | — | — |
 | M2: TCP client → PC server <pc-ip>:1234 | ⬜ TODO | — | board = client |
 | M3: Raw PCM TCP stream playback + jitter buffer (PSRAM) | ⬜ TODO | — | 48k/16bit/MONO |
@@ -34,7 +35,11 @@
 ## 5. ERROR LOG (every compile/flash/runtime error, chronologically)
 | # | Date | Error message (verbatim) | Context | Fix attempted | Result |
 |---|---|---|---|---|---|
-| — | — | — | — | — | — |
+| 1 | 2026-09-08 | `idf.py` not recognized | export.bat with D:\esp32\v6.1 silently failed (EIM install, nonstandard layout) | Created canonical `env.ps1` mirroring official EIM PowerShell profile | ✅ works |
+| 2 | 2026-09-08 | `TypeError: expected string or bytes-like object, got 'NoneType'` in idf_extensions.py | idf.py needs ESP_IDF_VERSION env | Added `ESP_IDF_VERSION=6.1`, `IDF_VERSION=6.1.0`, `IDF_COMPONENT_LOCAL_STORAGE_URL` to env.ps1 | ✅ works |
+| 3 | 2026-09-08 | `ERROR: COM3 failed to connect` | `idf.py flash` without -p auto-picked COM3 (Intel AMT!) | Always pass `-p COM5` | ✅ works |
+| 4 | 2026-09-08 | `Could not open COM5 ... PermissionError(13)` | stale monitor python process held port | Kill stray python processes before flash | ✅ works |
+| 5 | 2026-09-08 | `task_wdt: IDLE0 not reset` + backtrace in pump loop | tone loop blocked forever in app_main then spun on CPU0 | Moved pump to dedicated task with `vTaskDelay(4ms)` rate-limit + error-checked writes + precomputed 48-sample sine table | ✅ monitor clean |
 
 ## 6. DECISIONS & REASONS
 | Decision | Reason |
@@ -57,9 +62,10 @@
 | M3 streaming | Speaker plays PC audio in sync, no dropouts ≥2min, stops promptly (<500ms) on stream end |
 
 ## 9. SESSION PROTOCOL (before every flash/test)
-- Detect COM port fresh every session (Device Manager or `[System.IO.Ports.SerialPort]::GetPortNames()`) — it has changed before (seen COM3 and COM5). Never assume COM5.
+- Detect COM port fresh every session — COM5 = board, COM3 = Intel AMT (never use).
 - Build must succeed before flashing. Never flash a stale build.
 - Save monitor output to `logs/<date>_<milestone>.md` before touching code.
+- Toolchain: **IDF v6.1 at `D:\esp32\v6.1\esp-idf`**, tools at `C:\Espressif\tools` (switched from old D:\esp32-tools v5.3.2 install).
 
 ## 10. FILE HYGIENE
 - One canonical file per purpose — never duplicate scripts/tests under new names (send_pcm.py stays send_pcm.py).
