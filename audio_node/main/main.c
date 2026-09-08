@@ -1,16 +1,21 @@
 /*
- * audio_node — M0: serial tone test (I2S only, no network)
+ * audio_node — M1: WiFi connect (M0 tone still playing as proof-of-life)
  * Board: ESP32-S3-DevKitC-1-N8R2, Amp: MAX98357A
  * 48000 Hz, 16-bit, MONO, I2S Philips std, no MCLK.
  * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled)
  */
 #include <stdio.h>
+#include <string.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "driver/i2s_std.h"
 #include "driver/gpio.h"
-#include "freertos/semphr.h"
+#include "esp_wifi.h"
+#include "esp_event.h"
+#include "esp_netif.h"
+#include "nvs_flash.h"
 
 
 #define PIN_BCLK   4
@@ -21,6 +26,68 @@
 #define SAMPLE_RATE 48000
 #define TONE_HZ     1000
 #define AMP         8000   /* ~25% full scale, safe for speaker */
+
+#define WIFI_SSID   "<ssid>"
+#define WIFI_PASS   "<password>"
+
+static EventGroupHandle_t wifi_events;
+#define WIFI_CONNECTED_BIT BIT0
+
+static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
+{
+    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
+        esp_wifi_connect();
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        printf("wifi disconnected, retrying...\n");
+        esp_wifi_connect();
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
+        printf("GOT IP: " IPSTR "\n", IP2STR(&evt->ip_info.ip));
+        xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
+    }
+}
+
+static void wifi_init(void)
+{
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+
+    wifi_events = xEventGroupCreate();
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+
+    wifi_config_t wifi_config = {
+        .sta = {
+            .ssid = WIFI_SSID,
+            .password = WIFI_PASS,
+        },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* Power-save OFF (proven fact: required for streaming) */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+
+    /* Wait for connection */
+    xEventGroupWaitBits(wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+}
+
+/* M1 check: print RSSI every 10s */
+static void rssi_task(void *arg)
+{
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        wifi_ap_record_t ap;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            printf("rssi=%d\n", ap.rssi);
+        }
+    }
+}
 
 static i2s_chan_handle_t tx_chan;
 
@@ -74,7 +141,7 @@ void audio_pump_task(void *arg)
 
 void app_main(void)
 {
-    printf("M0: serial tone test start\n");
+    printf("M1: wifi + tone test start\n");
     printf("I2S: %d Hz, 16-bit mono, BCLK=%d LRC=%d DIN=%d SD=%d\n",
            SAMPLE_RATE, PIN_BCLK, PIN_LRC, PIN_DIN, PIN_SD);
 
@@ -87,4 +154,15 @@ void app_main(void)
 
     /* Pump runs in its own task: keeps app_main free (avoids task watchdog timeout) */
     xTaskCreate(audio_pump_task, "audio_pump", 4096, NULL, 5, NULL);
+
+    /* WiFi */
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(ret);
+    wifi_init();
+    printf("wifi connected, power-save OFF\n");
+    xTaskCreate(rssi_task, "rssi", 3072, NULL, 3, NULL);
 }
