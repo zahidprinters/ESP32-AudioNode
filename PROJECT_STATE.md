@@ -7,10 +7,11 @@
 ---
 
 ## 1. WHERE WE ARE (current focus)
-- Phase: **M3 streaming — data path verified end-to-end (2.88MB / 30s clean); awaiting user audio confirmation**
-- Current task: user confirms 1kHz tone heard for 30s during test, then silence
-- Last action: fixed ghost-connection race (5s boot delay + server-after-monitor in harness); full stream verified in monitor log
-- Next step: on user confirmation → mark M3 ✅ → commit → then robustness/noise passes
+- Phase: **M3 — 2-min data run verified (11,520,000 bytes / 120.0 s, 0 drops, 0 errors); awaiting user AUDIO confirmation**
+- Current task: user confirms 1kHz tone heard for 120 s, then prompt silence (<500 ms) at stream end
+- Last action: 2026-09-10 acceptance run — see `logs/2026-09-10_M3-2min-stream.md`
+- New quirk+fix: board stuck in download mode → `esptool -p COM5 run` then `monitor --no-reset` (no unplug needed); harness updated
+- Next step: on user confirmation → mark M3 ✅ in §2/§3 → then robustness/noise passes
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\tools` — export.bat does NOT work (EIM install); use `D:\esp-idf\env.ps1`.
 
 ## 2. FEATURE MAP (what exists / what's left)
@@ -20,12 +21,17 @@
 | M0: Serial tone test (I2S direct, no network) | ✅ DONE | `main/main.c` | 1kHz tone clean (user verified by ear) |
 | M1: WiFi connect (power-save OFF) | ✅ DONE | `main/main.c` | IP <board-ip>, RSSI -34..-38, stable 65s |
 | M2: TCP client → PC server | ✅ DONE | `main/main.c` + `server/send_pcm.py` | accept + connection held (verified both sides) |
-| M3: Raw PCM TCP stream + PSRAM jitter buffer | 🔨 data verified, awaiting audio OK | `main/main.c` | 2,881,536 bytes / 30s clean, stream end clean |
-| PC-side test sender (Python, TCP) | ⬜ TODO | `server/` | — |
-| Stream-end flush (audio stops promptly) | ⬜ TODO | — | — |
+| M3: Raw PCM TCP stream + PSRAM jitter buffer | ✅ DONE | `main/main.c` | 2-min run: 11,520,000 B / 120.0 s, 0 drops 0 errors; audio user-confirmed, prompt stop |
+| PC-side test sender (Python, TCP) | ✅ DONE | `server/send_pcm.py` | server + stream modes, CLI-arg variation |
+| Stream-end flush (audio stops promptly) | ✅ DONE | `main/main.c` | ring_flush() on recv()==0; user-confirmed prompt stop |
 
 ## 3. VERIFIED WORKING ✅ (do not break)
-- (none yet — will be filled after M0 passes)
+- M0 1kHz serial tone via I2S (user verified by ear)
+- M1 WiFi STA, power-save OFF (IP <board-ip>, RSSI -34..-41)
+- M2 TCP client → PC server accept (port 1234)
+- M3 streaming: 120.0 s / 11,520,000 bytes, 0 drops, 0 recv errors, prompt stop on stream end (user-confirmed, 2026-09-10)
+- PSRAM octal ring buffer (256KB) stable under 2-min continuous load
+- Download-mode recovery: `esptool -p COM5 run` + `monitor --no-reset` (see §5 #12)
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
 | Date | What we tried | Exact error/symptom | Why failed (root cause) | Outcome |
@@ -46,6 +52,7 @@
 | 9 | 2026-09-08 | build targeted **esp32** (not s3!) | deleted sdkconfig but ran build without set-target | Always run set-target after deleting sdkconfig | ✅ |
 | 10 | 2026-09-08 | PC `10054` + board `recv err errno=104 after 0 bytes` | ghost/stale connection from previous board boot accepted by fresh server (race: server started while board was mid-retry from dead session) | Board: 5s delay before first connect; harness: start monitor BEFORE server; kill orphan pythons between tests | ✅ full 30s stream clean |
 | 11 | 2026-09-08 | zombie python processes survive test harness | Stop-Process kills wrapper pwsh, not python children | harness kills all python after test; kill pythons before each test | ✅ |
+| 12 | 2026-09-10 | board stuck at `rst:0x15 USB_UART_CHIP_RESET, boot:0x0 DOWNLOAD` "waiting for download"; each `idf.py monitor` open re-reset it into download mode | USB-CDC boot-mode latch; unplug/replug normally fixes | With COM5 free: `python -m esptool --chip esp32s3 -p COM5 run` then `idf.py -p COM5 monitor --no-reset`. Harness runs esptool FIRST, then monitor (never concurrently — port conflict) | ✅ no unplug needed |
 
 ## 6. DECISIONS & REASONS
 | Decision | Reason |
