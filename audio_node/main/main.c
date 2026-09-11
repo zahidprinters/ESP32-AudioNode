@@ -19,6 +19,7 @@
 #include "lwip/sockets.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "led_strip.h"
 #include <stdlib.h>
 
 #define PC_SERVER_IP   "<pc-ip>"
@@ -76,10 +77,29 @@ static void ring_flush(void) { xSemaphoreTake(ring_mutex, portMAX_DELAY); ring_h
 #define PIN_LRC    5
 #define PIN_DIN    6
 #define PIN_SD     15
+#define PIN_RGB    48   /* onboard WS2812 RGB LED */
+
+/* LED state: RGB shows connection state when idle, audio VU when streaming */
+static led_strip_handle_t rgb_led = NULL;
+static volatile uint8_t vu_level = 0;    /* smoothed audio level 0..255 */
+static volatile int net_state = 0;       /* 0=wifi down, 1=waiting, 2=streaming */
 
 #define SAMPLE_RATE 48000
 #define TONE_HZ     1000
 #define AMP         8000   /* ~25% full scale, safe for speaker */
+
+/* Digital gain for streamed PCM (SD pin at VDD = amp's 3dB minimum gain).
+   x2 = +6dB. Sender decodes at -7dB headroom, so x2 lands near full scale
+   without clipping. */
+#define PCM_GAIN    2
+
+static inline int16_t gain_clip(int32_t s)
+{
+    s *= PCM_GAIN;
+    if (s > 32767) s = 32767;
+    if (s < -32768) s = -32768;
+    return (int16_t)s;
+}
 
 #define WIFI_SSID   "<ssid>"
 #define WIFI_PASS   "<password>"
@@ -93,10 +113,12 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         printf("wifi disconnected, retrying...\n");
+        net_state = 0;
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
         printf("GOT IP: " IPSTR "\n", IP2STR(&evt->ip_info.ip));
+        net_state = 1;   /* waiting for server */
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
     }
 }
@@ -174,50 +196,112 @@ void audio_pump_task(void *arg)
         sine_tab[i] = (int16_t)(AMP * sinf(2.0f * (float)M_PI * TONE_HZ * i / SAMPLE_RATE));
     }
 
-    static int16_t buf[2 * 256];  /* stereo interleaved, 256 frames */
+    static int16_t buf[2 * 1024];  /* stereo interleaved, up to 1024 frames (21.3ms) */
     int n = 0;
     int err_printed = 0;
     size_t written = 0;
     while (1) {
         int mode = play_mode;
-        int got = 0;
-        if (mode == 1) {
-            /* stream: pull from ring (bytes = frames*2, duplicated to L/R) */
-            static int16_t mono[256];
-            xSemaphoreTake(ring_mutex, portMAX_DELAY);
-            int avail = ring_used();
-            xSemaphoreGive(ring_mutex);
-            if (avail >= 512) {
-                ring_read((uint8_t *)mono, 512);
-                got = 1;
-            } else if (avail == 0 && mode == 1) {
-                vTaskDelay(pdMS_TO_TICKS(2));  /* underrun: brief wait */
-                continue;
-            } else {
-                got = 1;  /* partial: pad below */
-            }
-            if (got) {
-                for (int i = 0; i < 256; i++) {
-                    buf[2 * i] = mono[i];
-                    buf[2 * i + 1] = mono[i];
-                }
-            }
-        }
+        int frames = 0;
         if (mode == 0) {
-            for (int i = 0; i < 256; i++) {
+            for (int i = 0; i < 1024; i++) {
                 int16_t s = sine_tab[n % 48];
                 buf[2 * i] = s;      /* L */
                 buf[2 * i + 1] = s;  /* R */
                 n++;
             }
-        } else if (mode == 2 || (mode == 1 && !got)) {
+            frames = 1024;
+            /* power-on tone limited to ~2s (user request), then silence
+               until the stream connects. tcp_task switches back to mode 1. */
+            static int tone_ms = 0;
+            tone_ms += 1024 * 1000 / SAMPLE_RATE;   /* 21.3ms per chunk */
+            if (tone_ms >= 2000 && play_mode == 0) play_mode = 2;
+        } else if (mode == 1) {
+            /* stream: pull up to 1024 frames from ring, apply digital gain, dup L/R */
+            static int16_t mono[1024];
+            xSemaphoreTake(ring_mutex, portMAX_DELAY);
+            int avail = ring_used() & ~1;   /* even bytes only */
+            xSemaphoreGive(ring_mutex);
+            if (avail >= 2048) {
+                ring_read((uint8_t *)mono, 2048);
+                frames = 1024;
+            } else if (avail >= 512) {
+                int bytes = (avail > 2048) ? 2048 : avail;
+                bytes &= ~1;
+                ring_read((uint8_t *)mono, bytes);
+                frames = bytes / 2;
+            } else {
+                vTaskDelay(pdMS_TO_TICKS(2));  /* underrun: brief wait */
+                continue;
+            }
+            for (int i = 0; i < frames; i++) {
+                int16_t s = gain_clip(mono[i]);
+                buf[2 * i] = s;
+                buf[2 * i + 1] = s;
+            }
+            memset(&buf[2 * frames], 0, sizeof(buf) - frames * 4);
+        } else {
             memset(buf, 0, sizeof(buf));
+            frames = 1024;
         }
-        esp_err_t ret = i2s_channel_write(tx_chan, buf, sizeof(buf), &written, portMAX_DELAY);
-        if (ret != ESP_OK || written != sizeof(buf)) {
-            if (err_printed++ < 5) printf("i2s write ret=%d written=%u/%u\n", ret, (unsigned)written, (unsigned)sizeof(buf));
+        /* VU level for RGB LED: peak of written audio, fast attack / slow decay */
+        {
+            int peak = 0;
+            for (int i = 0; i < frames; i++) {
+                int a = buf[2 * i]; if (a < 0) a = -a;
+                if (a > peak) peak = a;
+            }
+            int lvl = peak / 128; if (lvl > 255) lvl = 255;
+            if (lvl > vu_level) vu_level = (uint8_t)lvl;
+            else if (vu_level > 8) vu_level -= 8; else vu_level = 0;
         }
-        vTaskDelay(pdMS_TO_TICKS(4));   /* rate-limit: 1024 bytes = 5.3ms audio; yield so IDLE0 feeds */
+        esp_err_t ret = i2s_channel_write(tx_chan, buf, frames * 4, &written, portMAX_DELAY);
+        if (ret != ESP_OK || written != (size_t)frames * 4) {
+            if (err_printed++ < 5) printf("i2s write ret=%d written=%u/%u\n", ret, (unsigned)written, (unsigned)frames * 4);
+        }
+        /* yield so IDLE0 feeds; DMA backpressure does the exact real-time pacing.
+           NOTE: 14ms here starved the DMA (21.3ms chunk delivered every ~35ms)
+           → periodic stuck-buffer long tones. 4ms is the proven-clean value. */
+        vTaskDelay(pdMS_TO_TICKS(4));
+    }
+}
+
+/* RGB LED: idle → connection state (red=wifi down, blue breathing=waiting);
+   streaming → VU meter (green=quiet → red=loud), driven by smoothed peak */
+static void rgb_init(void)
+{
+    led_strip_config_t strip_cfg = { .strip_gpio_num = PIN_RGB, .max_leds = 1 };
+    led_strip_rmt_config_t rmt_cfg = { .resolution_hz = 10 * 1000 * 1000 };
+    if (led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &rgb_led) == ESP_OK) {
+        led_strip_clear(rgb_led);
+    } else {
+        printf("rgb: init failed, LED disabled\n");
+        rgb_led = NULL;
+    }
+}
+
+static void led_task(void *arg)
+{
+    int phase = 0;
+    while (1) {
+        if (rgb_led == NULL) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
+        if (net_state == 2) {
+            /* VU: quadratic red + inverse green = green quiet → red loud */
+            int v = vu_level;
+            uint8_t r = (uint8_t)((v * v) >> 8);
+            uint8_t g = (uint8_t)(255 - ((v * v) >> 8));
+            led_strip_set_pixel(rgb_led, 0, r, g, 0);
+        } else if (net_state == 1) {
+            /* blue breathing: 0..255..0 over ~3s */
+            int ph = phase = (phase + 1) % 100;
+            int b = ph < 50 ? ph * 5 : (100 - ph) * 5;
+            led_strip_set_pixel(rgb_led, 0, 0, 0, (uint8_t)b);
+        } else {
+            /* wifi down: solid dim red */
+            led_strip_set_pixel(rgb_led, 0, 60, 0, 0);
+        }
+        led_strip_refresh(rgb_led);
+        vTaskDelay(pdMS_TO_TICKS(30));
     }
 }
 
@@ -243,14 +327,25 @@ static void tcp_task(void *arg)
             getsockname(sock, (struct sockaddr *)&local, &slen);
             printf("tcp: CONNECTED — stream ready (local port %d, t=%lld ms)\n", ntohs(local.sin_port), esp_timer_get_time() / 1000);
             play_mode = 1;
+            net_state = 2;   /* streaming */
+            /* prefill ~170ms before starting playback (avoids start underruns) */
+            int64_t pf0 = esp_timer_get_time();
+            while (ring_used() < 16384 && esp_timer_get_time() - pf0 < 2000000) {
+                vTaskDelay(pdMS_TO_TICKS(2));
+            }
             uint64_t total = 0;
+            int64_t last_log = 0;
             while (1) {
                 int len = recv(sock, rx, sizeof(rx), 0);
                 if (len > 0) {
                     int w = ring_write(rx, len);
                     total += w;
                     if (w < len) printf("tcp: ring full, dropped %d\n", len - w);
-                    if ((total & 0xFFFF) < 4096) printf("tcp: total=%llu (t=%lld ms)\n", total, esp_timer_get_time() / 1000);
+                    int64_t now = esp_timer_get_time();
+                    if (now - last_log > 5000000) {   /* log at most every 5s (USB CDC printf disturbs audio) */
+                        printf("tcp: total=%llu (t=%lld ms)\n", total, now / 1000);
+                        last_log = now;
+                    }
                 } else if (len == 0) {
                     printf("tcp: stream end (%llu bytes) t=%lld ms\n", total, esp_timer_get_time() / 1000);
                     break;
@@ -262,6 +357,7 @@ static void tcp_task(void *arg)
             /* flush so audio stops promptly after stream end */
             ring_flush();
             play_mode = 2;
+            net_state = 1;   /* back to waiting */
         } else {
             printf("tcp: connect failed (errno=%d), retry\n", errno);
         }
@@ -282,6 +378,10 @@ void app_main(void)
     gpio_set_level(PIN_SD, 1);
 
     i2s_init();
+
+    /* RGB LED (WS2812 on GPIO48): connection state + audio VU */
+    rgb_init();
+    xTaskCreate(led_task, "led", 3072, NULL, 2, NULL);
 
     /* PSRAM ring buffer for jitter buffering */
     ring_buf = heap_caps_malloc(RING_SIZE, MALLOC_CAP_SPIRAM);

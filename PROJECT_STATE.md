@@ -7,11 +7,11 @@
 ---
 
 ## 1. WHERE WE ARE (current focus)
-- Phase: **M3 — 2-min data run verified (11,520,000 bytes / 120.0 s, 0 drops, 0 errors); awaiting user AUDIO confirmation**
-- Current task: user confirms 1kHz tone heard for 120 s, then prompt silence (<500 ms) at stream end
-- Last action: 2026-09-10 acceptance run — see `logs/2026-09-10_M3-2min-stream.md`
-- New quirk+fix: board stuck in download mode → `esptool -p COM5 run` then `monitor --no-reset` (no unplug needed); harness updated
-- Next step: on user confirmation → mark M3 ✅ in §2/§3 → then robustness/noise passes
+- Phase: **M4: MP3 streaming + RGB LED (VU + connection states) working — user-verified**
+- Working build: pump pacing 4ms (DMA backpressure), PCM_GAIN x2 + sender headroom 0.45, highpass 120Hz, 2s power-on tone, RGB LED VU/state
+- Tried & failed: PCM_GAIN x4 (clipping), acompressor/alimiter filter chain (sender slower than real-time → periodic underruns "long tones") — both reverted
+- Next step: further robustness (WiFi drop resilience, reconnect mid-song) or features user requests
+- Log: `logs/2026-09-10_M4-mp3-streaming.md`
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\tools` — export.bat does NOT work (EIM install); use `D:\esp-idf\env.ps1`.
 
 ## 2. FEATURE MAP (what exists / what's left)
@@ -92,6 +92,12 @@
 3. M1 WiFi connect → verify IP + RSSI in monitor log
 4. M2 TCP connect → verify accept() on PC
 5. M3 streaming → verify audio, log packet stats
+
+## 12. DEV TOOLING (2026-09-11, non-firmware)
+- Cline global tooling installed (details: `logs/2026-09-11_cline-global-tooling.md`): ponytail rule
+  (`~/.cline/rules/ponytail.md`), graphify skill (`~/.cline/skills/graphify/`) + `pip install graphifyy`,
+  OmniRoute v3.8.50 (`npm i -g omniroute`, dashboard :20128, `omniroute setup-cline` wired the Cline CLI).
+- No firmware code touched; no git commit for this (machine-level config, lives outside repo).
 
 ## 9. DEBUG TOOLS AVAILABLE
 - Monitor logs over USB CDC (`idf.py -p COM5 monitor --no-reset`)
