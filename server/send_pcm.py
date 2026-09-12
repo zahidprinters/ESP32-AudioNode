@@ -98,13 +98,16 @@ def file_mode(path, port, vol):
     print(f"listening on 0.0.0.0:{port} — waiting for board... (file: {path})")
     conn, addr = s.accept()
     print(f"ACCEPTED connection from {addr[0]}:{addr[1]} — streaming file", flush=True)
-    # decode: 48kHz, mono, 16-bit LE raw PCM on stdout, -7dB peak headroom
-    # (board applies x2 = +6dB digital gain; headroom prevents clipping).
-    # NOTE: acompressor/alimiter chain = sender slower than real-time →
-    # periodic underruns (long tone every few sec) — REVERTED, keep simple.
+    # decode: 48kHz, mono, 16-bit LE raw PCM on stdout.
+    # chain (strong anti-bass-masking for the 2-inch speaker):
+    #   highpass 150Hz (kill all sub-vocal boom) → bass shelf -12dB (drums stop
+    #   covering vocals) → heavy compressor (loud beats squashed toward mids) →
+    #   limiter → volume headroom (board applies x2 = +6dB; 0.45*2 = 0.9 peak).
     proc = subprocess.Popen(
         [ffmpeg, "-v", "error", "-i", path, "-ac", "1", "-ar", str(SR),
-         "-f", "s16le", "-af", f"highpass=f=120,volume={0.45 * vol}", "pipe:1"],
+         "-f", "s16le",
+         "-af", f"highpass=f=150,bass=g=-12:f=200,acompressor=threshold=0.2:ratio=5:attack=15:release=200,alimiter=limit=0.75,volume={0.45 * vol}",
+         "pipe:1"],
         stdout=subprocess.PIPE)
     sent = 0
     t0 = None

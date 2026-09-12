@@ -1,8 +1,8 @@
 /*
- * audio_node — M1: WiFi connect (M0 tone still playing as proof-of-life)
+ * audio_node — WiFi audio streamer (M4)
  * Board: ESP32-S3-DevKitC-1-N8R2, Amp: MAX98357A
  * 48000 Hz, 16-bit, MONO, I2S Philips std, no MCLK.
- * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled)
+ * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled), RGB LED=48
  */
 #include <stdio.h>
 #include <string.h>
@@ -33,6 +33,7 @@ static uint8_t *ring_buf = NULL;
 static volatile int ring_head = 0, ring_tail = 0;   /* head=write, tail=read */
 static SemaphoreHandle_t ring_mutex;
 static volatile int play_mode = 0;  /* 0=tone, 1=stream, 2=silence */
+static volatile uint32_t pump_chunks = 0;  /* diag: pump loop iterations */
 
 static inline int ring_used(void) { int d = ring_head - ring_tail; if (d < 0) d += RING_SIZE; return d; }
 static inline int ring_free(void) { return RING_SIZE - 1 - ring_used(); }
@@ -231,7 +232,12 @@ void audio_pump_task(void *arg)
                 ring_read((uint8_t *)mono, bytes);
                 frames = bytes / 2;
             } else {
-                vTaskDelay(pdMS_TO_TICKS(2));  /* underrun: brief wait */
+                /* starved: emit ~5ms of SILENCE instead of leaving the DMA
+                   replaying the last buffer (= harsh buzzing noise) */
+                memset(buf, 0, 256 * 4);
+                frames = 256;
+                esp_err_t ret = i2s_channel_write(tx_chan, buf, frames * 4, &written, portMAX_DELAY);
+                vTaskDelay(pdMS_TO_TICKS(2));
                 continue;
             }
             for (int i = 0; i < frames; i++) {
@@ -259,10 +265,10 @@ void audio_pump_task(void *arg)
         if (ret != ESP_OK || written != (size_t)frames * 4) {
             if (err_printed++ < 5) printf("i2s write ret=%d written=%u/%u\n", ret, (unsigned)written, (unsigned)frames * 4);
         }
-        /* yield so IDLE0 feeds; DMA backpressure does the exact real-time pacing.
-           NOTE: 14ms here starved the DMA (21.3ms chunk delivered every ~35ms)
-           → periodic stuck-buffer long tones. 4ms is the proven-clean value. */
-        vTaskDelay(pdMS_TO_TICKS(4));
+        /* pacing = DMA backpressure alone: i2s_channel_write blocks until the
+           DMA has drained one chunk (21.3ms). A fixed sleep here adds a 4ms
+           deficit per chunk → periodic dry gaps → glitch/buzz on buffer replay. */
+        pump_chunks++;
     }
 }
 
@@ -328,14 +334,22 @@ static void tcp_task(void *arg)
             printf("tcp: CONNECTED — stream ready (local port %d, t=%lld ms)\n", ntohs(local.sin_port), esp_timer_get_time() / 1000);
             play_mode = 1;
             net_state = 2;   /* streaming */
-            /* prefill ~170ms before starting playback (avoids start underruns) */
+            /* prefill ~330ms before starting playback (jitter headroom;
+               16KB was too thin on weak WiFi/power setups) */
             int64_t pf0 = esp_timer_get_time();
-            while (ring_used() < 16384 && esp_timer_get_time() - pf0 < 2000000) {
+            while (ring_used() < 65536 && esp_timer_get_time() - pf0 < 2000000) {
                 vTaskDelay(pdMS_TO_TICKS(2));
             }
             uint64_t total = 0;
             int64_t last_log = 0;
             while (1) {
+                /* never drop: if the ring is nearly full, wait instead of
+                   recv-ing. A dropped byte would shift the whole stream into
+                   permanent noise. TCP backpressure throttles the sender. */
+                if (ring_free() < 4096) {
+                    vTaskDelay(pdMS_TO_TICKS(2));
+                    continue;
+                }
                 int len = recv(sock, rx, sizeof(rx), 0);
                 if (len > 0) {
                     int w = ring_write(rx, len);
@@ -343,7 +357,9 @@ static void tcp_task(void *arg)
                     if (w < len) printf("tcp: ring full, dropped %d\n", len - w);
                     int64_t now = esp_timer_get_time();
                     if (now - last_log > 5000000) {   /* log at most every 5s (USB CDC printf disturbs audio) */
-                        printf("tcp: total=%llu (t=%lld ms)\n", total, now / 1000);
+                        printf("tcp: total=%llu ring=%d pump=%lu (t=%lld ms)\n",
+                               (unsigned long long)total, ring_used(),
+                               (unsigned long)pump_chunks, (long long)(now / 1000));
                         last_log = now;
                     }
                 } else if (len == 0) {
@@ -368,9 +384,9 @@ static void tcp_task(void *arg)
 
 void app_main(void)
 {
-    printf("M1: wifi + tone test start\n");
-    printf("I2S: %d Hz, 16-bit mono, BCLK=%d LRC=%d DIN=%d SD=%d\n",
-           SAMPLE_RATE, PIN_BCLK, PIN_LRC, PIN_DIN, PIN_SD);
+    printf("audio_node: WiFi streamer start\n");
+    printf("I2S: %d Hz, 16-bit mono, BCLK=%d LRC=%d DIN=%d SD=%d RGB=%d\n",
+           SAMPLE_RATE, PIN_BCLK, PIN_LRC, PIN_DIN, PIN_SD, PIN_RGB);
 
     /* Amp enable (SD HIGH) */
     ESP_ERROR_CHECK(gpio_reset_pin(PIN_SD));

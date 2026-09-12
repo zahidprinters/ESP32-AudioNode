@@ -7,11 +7,10 @@
 ---
 
 ## 1. WHERE WE ARE (current focus)
-- Phase: **M4: MP3 streaming + RGB LED (VU + connection states) working — user-verified**
-- Working build: pump pacing 4ms (DMA backpressure), PCM_GAIN x2 + sender headroom 0.45, highpass 120Hz, 2s power-on tone, RGB LED VU/state
-- Tried & failed: PCM_GAIN x4 (clipping), acompressor/alimiter filter chain (sender slower than real-time → periodic underruns "long tones") — both reverted
-- Next step: further robustness (WiFi drop resilience, reconnect mid-song) or features user requests
-- Log: `logs/2026-09-10_M4-mp3-streaming.md`
+- Phase: **M4 production baseline cleaned & running; sound fine-tuning round 2 (bass-masking: strong cut -12dB + heavy compressor, listening)**
+- Production build (verified flashing): pump = pure DMA backpressure (no fixed sleep), no-drop TCP (pause recv when ring nearly full), 65KB prefill, stall→silence, PCM_GAIN x2 + sender headroom 0.45, RGB LED VU/states, 2s power-on tone
+- Sender chain v2: highpass 150Hz + bass -12dB@200 + compressor 0.2/5:1 + limiter 0.75 + volume 0.45
+- Known pitfall: stale zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` + kill monitor wrappers, verify 0 pythons, before any run
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\tools` — export.bat does NOT work (EIM install); use `D:\esp-idf\env.ps1`.
 
 ## 2. FEATURE MAP (what exists / what's left)
