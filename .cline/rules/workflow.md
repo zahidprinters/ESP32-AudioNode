@@ -17,7 +17,7 @@ It tracks: current focus, feature map, verified working, tried-and-failed, error
 
 ## Verification style
 - Verify by ear + **PC microphone** recording/analysis when needed (proven: tone/noise ratio ~99x method).
-- Prove each milestone before moving on: serial tone first → then WiFi → then TCP → then streaming.
+- Prove each milestone before moving on: serial tone first → then WiFi → then RTP UDP receiver → then streaming.
 
 ## Anti-patterns (never do)
 - Re-trying a known-failed approach (check §4 first)

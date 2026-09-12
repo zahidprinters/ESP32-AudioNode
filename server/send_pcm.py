@@ -11,6 +11,7 @@ Examples:
   python send_pcm.py server                 # M2: just accept + log
   python send_pcm.py stream 60 1000 0.5     # M3: send 60s of 1kHz tone at 0.5 vol to first board that connects
   python send_pcm.py file song.mp3 1234 1.0 # stream a real audio file (mp3 etc.) decoded to 48k/16b/mono PCM
+  python send_pcm.py loop 1234 1.0          # VLC mode: stream PC speaker output (VLC controls everything)
 """
 import socket
 import struct
@@ -99,14 +100,13 @@ def file_mode(path, port, vol):
     conn, addr = s.accept()
     print(f"ACCEPTED connection from {addr[0]}:{addr[1]} — streaming file", flush=True)
     # decode: 48kHz, mono, 16-bit LE raw PCM on stdout.
-    # chain (strong anti-bass-masking for the 2-inch speaker):
-    #   highpass 150Hz (kill all sub-vocal boom) → bass shelf -12dB (drums stop
-    #   covering vocals) → heavy compressor (loud beats squashed toward mids) →
-    #   limiter → volume headroom (board applies x2 = +6dB; 0.45*2 = 0.9 peak).
+    # chain (anti-bass-masking + reduced overall volume for 2-inch speaker):
+    #   highpass 180Hz → bass shelf -16dB@220 → heavy compressor → limiter
+    #   → volume 0.30 (board x2 gain → 0.6 peak, comfortably below clipping).
     proc = subprocess.Popen(
         [ffmpeg, "-v", "error", "-i", path, "-ac", "1", "-ar", str(SR),
          "-f", "s16le",
-         "-af", f"highpass=f=150,bass=g=-12:f=200,acompressor=threshold=0.2:ratio=5:attack=15:release=200,alimiter=limit=0.75,volume={0.45 * vol}",
+         "-af", f"highpass=f=180,bass=g=-16:f=220,acompressor=threshold=0.2:ratio=5:attack=15:release=200,alimiter=limit=0.75,volume={0.30 * vol}",
          "pipe:1"],
         stdout=subprocess.PIPE)
     sent = 0
@@ -137,6 +137,53 @@ def file_mode(path, port, vol):
         conn.close()
         s.close()
 
+def loop_mode(port, vol):
+    """VLC mode: capture the PC's speaker output (WASAPI loopback — whatever
+    VLC is playing) and stream it to the board in real time. VLC controls
+    play/pause/volume; the board mirrors the PC speakers."""
+    import numpy as np
+    import pyaudiowpatch as pyaudio
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("0.0.0.0", port))
+    s.listen(1)
+    print(f"listening on 0.0.0.0:{port} — waiting for board... (VLC loopback mode)")
+    conn, addr = s.accept()
+    print(f"ACCEPTED connection from {addr[0]}:{addr[1]} — streaming PC audio loopback", flush=True)
+    pa = pyaudio.PyAudio()
+    dev = pa.get_default_wasapi_loopback()
+    ch = int(dev["maxInputChannels"])
+    rate = int(dev["defaultSampleRate"])
+    print(f"loopback device: {dev['name']} ({ch}ch @ {rate}Hz)", flush=True)
+    frames = 1024
+    sent = 0
+    try:
+        stream = pa.open(format=pyaudio.paInt16, channels=ch, rate=rate,
+                         input=True, input_device_index=dev["index"],
+                         frames_per_buffer=frames)
+        while True:
+            raw = stream.read(frames, exception_on_overflow=False)
+            x = np.frombuffer(raw, dtype="<i2").astype(np.float64)
+            x = x.reshape(-1, ch).mean(axis=1)              # stereo → mono mixdown
+            if rate != SR:                                   # resample to 48k
+                n_out = int(round(len(x) * SR / rate))
+                x = np.interp(np.linspace(0, len(x) - 1, n_out), np.arange(len(x)), x)
+            pcm = (np.clip(x * vol, -32767, 32767)).astype("<i2").tobytes()
+            conn.sendall(pcm)
+            sent += len(pcm)
+            if sent % (frames * 2 * 50) == 0:
+                print(f"sent {sent} bytes ({sent/(2*SR):.1f}s)", flush=True)
+    except (BrokenPipeError, ConnectionResetError) as e:
+        print(f"\nconnection lost: {e}")
+    except Exception as e:
+        print(f"\nloopback error: {e}")
+    finally:
+        try: stream.stop_stream(); stream.close()
+        except Exception: pass
+        pa.terminate()
+        conn.close()
+        s.close()
+
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "server":
         server_mode(int(sys.argv[2]) if len(sys.argv) > 2 else 1234)
@@ -151,5 +198,9 @@ if __name__ == "__main__":
         port = int(sys.argv[3]) if len(sys.argv) > 3 else 1234
         vol = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
         file_mode(path, port, vol)
+    elif len(sys.argv) >= 2 and sys.argv[1] == "loop":
+        port = int(sys.argv[2]) if len(sys.argv) > 2 else 1234
+        vol = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
+        loop_mode(port, vol)
     else:
         print(__doc__)

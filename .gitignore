@@ -3,4 +3,4 @@ build/
 sdkconfig.old
 logs/*.tmp
 audio_node/managed_components/
-audio_node/dependencies.lock
+audio_node/dependencies.lock__pycache__/
