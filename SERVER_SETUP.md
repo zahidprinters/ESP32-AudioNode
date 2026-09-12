@@ -83,7 +83,7 @@ Generate a sine tone at the given frequency and stream it as RTP. Useful for ver
 
 ```bash
 python send_pcm.py tone <board-ip> 1234 1000 30 0.5   # 30s of 1kHz @ 0.5
-python send_pcm.py tone <board-ip>                    # default: 1kHz, 60s, vol 1.0
+python send_pcm.py tone <board-ip>                    # default: 1kHz, 30s, vol 0.5
 ```
 
 ## Volume / headroom

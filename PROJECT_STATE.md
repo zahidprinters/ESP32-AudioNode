@@ -127,7 +127,7 @@
   OmniRoute v3.8.50 (`npm i -g omniroute`, dashboard :20128, `omniroute setup-cline` wired the Cline CLI).
 - No firmware code touched; no git commit for this (machine-level config, lives outside repo).
 
-## 9. DEBUG TOOLS AVAILABLE
+## 13. DEBUG TOOLS AVAILABLE
 - Monitor logs over USB CDC (`idf.py -p COM5 monitor --no-reset`)
 - PC microphone (use to verify tone quality/noise — proven method, tone/noise ratio ~99x on previous test)
 - Board quirks: USB CDC can die after flash → unplug/replug; "waiting for download" → unplug/replug USB

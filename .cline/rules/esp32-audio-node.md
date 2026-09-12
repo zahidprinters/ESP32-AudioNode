@@ -70,3 +70,15 @@ If the SD pin is left at VDD, the MAX98357A is at its minimum gain (3 dB) — di
 - Clean tone verified via mic test (tone/noise ratio ~99x)
 - UDP/RTP is the production transport: validate every datagram (v=2, PT=96, source IP whitelist, seq/ts); silence-fill on loss; never block I2S waiting for a missing packet
 - Board = UDP listener (server sends TO the board); source IP validated against configured server IP
+
+## Documentation references
+- `README.md` — project overview, hardware, quick start, proven building blocks
+- `ARCHITECTURE.md` — full data flow, RTP protocol spec, packet validation, loss handling, I2S byte-order, WiFi modes, factory reset, multi-node
+- `SERVER_SETUP.md` — server-side setup (Windows/Mac/Linux), sender usage (file/loop/tone), VLC alternative, firewall, multi-node
+- `GUIDELINES.md` — toolchain, build/flash/test loop, commit policy, file hygiene, anti-patterns, TCP archive
+- `PROJECT_STATE.md` — live status, feature map, verified working, tried-and-failed, decisions, next steps
+
+## Session protocol (before any change)
+1. READ `PROJECT_STATE.md` — know what exists, what failed, what's next.
+2. Make the smallest possible change. One idea per build.
+3. Build (`idf.py build`), flash (`idf.py -p COM5 flash`), test, log to `logs/`, commit only if verified on hardware.
