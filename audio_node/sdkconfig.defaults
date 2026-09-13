@@ -5,3 +5,9 @@ CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=16384
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+# RTP L16 frames are 1932 B > 1500 MTU -> arrive IP-fragmented; without
+# reassembly lwIP drops them silently (recvfrom never returns).
+CONFIG_LWIP_IP4_REASSEMBLY=y
+# 50 RTP datagrams/s x 2 fragments; default 10 pbufs (~5 frames in flight)
+# overflows on WiFi bursts -> seq gaps. 20 doubles the cushion.
+CONFIG_LWIP_IP_REASS_MAX_PBUFS=20

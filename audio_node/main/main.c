@@ -17,13 +17,22 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "lwip/sockets.h"
+#include "lwip/inet.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "led_strip.h"
+#include "esp_http_server.h"
+#include "esp_system.h"
 #include <stdlib.h>
 
-#define PC_SERVER_IP   "<pc-ip>"
-#define PC_SERVER_PORT 1234
+/* P1: RTP L16 over UDP — 48 kHz, 16-bit, mono, 20 ms frames (960 samples / 1920 bytes) */
+#define UDP_PORT     1234
+#define RTP_PT        96   /* dynamic payload type for L16/48k/mono */
+#define FRAME_SAMPLES 960
+#define FRAME_BYTES  (FRAME_SAMPLES * 2)   /* 16-bit = 2 bytes/sample */
+
+/* Configured server IP for source-IP whitelist. 0 = accept any (set by NVS in P3). */
+static uint32_t configured_server_ip = 0;
 
 /* M3: raw PCM streaming — recv → PSRAM ring buffer → I2S pump.
  * Modes: TONE (no stream), STREAM (connected), SILENCE (stream ended, until next connect) */
@@ -71,9 +80,6 @@ static int ring_read(uint8_t *dst, int len)
     return r;
 }
 
-static void ring_flush(void) { xSemaphoreTake(ring_mutex, portMAX_DELAY); ring_head = ring_tail = 0; xSemaphoreGive(ring_mutex); }
-
-
 #define PIN_BCLK   4
 #define PIN_LRC    5
 #define PIN_DIN    6
@@ -102,11 +108,66 @@ static inline int16_t gain_clip(int32_t s)
     return (int16_t)s;
 }
 
-#define WIFI_SSID   "<ssid>"
-#define WIFI_PASS   "<password>"
+/* ── P2+P3: NVS config, setup AP + captive portal, STA mode + failover ── */
+#define CONFIG_SSID     "<ssid>"       /* first-boot seed, overrides via setup AP */
+#define CONFIG_PASS     "<password>"
+#define CFG_NS          "cfg"
+#define CFG_BLOB_KEY    "wifi"
+#define AP_SSID         "AudioNode-Setup"
+#define AP_GATEWAY      "192.168.4.1"
+#define STA_FAIL_TIMEOUT_MS 30000       /* no IP in 30 s => revert to setup AP */
+
+/* Persisted config blob (SSID, password, server ip/port) */
+typedef struct {
+    char ssid[33];
+    char password[64];
+    char server_ip[16];
+    uint16_t server_port;
+    uint8_t has_server;   /* 1 = server ip/port configured by user */
+} node_cfg_t;
+
+static node_cfg_t node_cfg;
+static volatile int cfg_loaded = 0;
+static volatile int ap_active = 0;      /* 1 = setup AP running */
 
 static EventGroupHandle_t wifi_events;
 #define WIFI_CONNECTED_BIT BIT0
+
+static esp_err_t cfg_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(CFG_NS, NVS_READWRITE, &h) != ESP_OK) return ESP_FAIL;
+    esp_err_t e = nvs_set_blob(h, CFG_BLOB_KEY, &node_cfg, sizeof(node_cfg));
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    if (e == ESP_OK) cfg_loaded = 1;
+    return e;
+}
+
+static esp_err_t cfg_load(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(CFG_NS, NVS_READONLY, &h) != ESP_OK) return ESP_FAIL;
+    size_t len = sizeof(node_cfg);
+    esp_err_t e = nvs_get_blob(h, CFG_BLOB_KEY, &node_cfg, &len);
+    nvs_close(h);
+    if (e == ESP_OK) cfg_loaded = 1;
+    return e;
+}
+
+static void cfg_factory_seed(void)
+{
+    /* First boot: seed the lab WiFi so a fresh board joins out of the box.
+       (Server ip = "0.0.0.0" => accept any source, matching pre-NVS P1.) */
+    memset(&node_cfg, 0, sizeof(node_cfg));
+    snprintf(node_cfg.ssid, sizeof(node_cfg.ssid), "%s", CONFIG_SSID);
+    snprintf(node_cfg.password, sizeof(node_cfg.password), "%s", CONFIG_PASS);
+    snprintf(node_cfg.server_ip, sizeof(node_cfg.server_ip), "0.0.0.0");
+    node_cfg.server_port = UDP_PORT;
+    node_cfg.has_server = 0;
+    cfg_save();
+    printf("cfg: first boot, seeded defaults (SSID=%s)\n", node_cfg.ssid);
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -115,43 +176,201 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         printf("wifi disconnected, retrying...\n");
         net_state = 0;
+        if (ap_active) return;          /* don't fight AP mode */
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
         printf("GOT IP: " IPSTR "\n", IP2STR(&evt->ip_info.ip));
-        net_state = 1;   /* waiting for server */
+        net_state = 1;                  /* waiting for server */
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
     }
 }
 
-static void wifi_init(void)
+/* Pull server IP out of NVS config into the udp_task whitelist. */
+static void cfg_apply_server_whitelist(void)
 {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    if (node_cfg.has_server && node_cfg.server_ip[0]) {
+        struct in_addr a;
+        if (inet_pton(AF_INET, node_cfg.server_ip, &a) == 1) {
+            configured_server_ip = a.s_addr;
+            printf("cfg: server whitelist %s\n", node_cfg.server_ip);
+            return;
+        }
+    }
+    configured_server_ip = 0;           /* accept any */
+}
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-
-    wifi_events = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
-
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-        },
-    };
+/* Standing STA-mode connect using saved config (non-blocking). */
+static esp_err_t sta_mode_start(void)
+{
+    wifi_config_t wc = { 0 };
+    memcpy(wc.sta.ssid, node_cfg.ssid, sizeof(wc.sta.ssid) - 1);
+    memcpy(wc.sta.password, node_cfg.password, sizeof(wc.sta.password) - 1);
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
+    ESP_ERROR_CHECK(esp_wifi_start());
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));   /* proven: needed for streaming */
+    ap_active = 0;
+    printf("STA: joining %s\n", node_cfg.ssid);
+    return ESP_OK;
+}
+
+/* ── P2: Setup AP + captive portal ─────────────────────────────── */
+static esp_err_t portal_get_handler(httpd_req_t *req)
+{
+    char *html =
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>AudioNode Setup</title>"
+        "<style>body{font-family:sans-serif;max-width:360px;margin:40px auto;}input{width:100%;"
+        "padding:8px;margin:6px 0;box-sizing:border-box;}"
+        "button{width:100%;padding:10px;background:#157;color:#fff;border:0;}</style>"
+        "</head><body><h2>AudioNode Setup</h2>"
+        "<form method='POST' action='/save'>"
+        "<label>WiFi SSID</label><input name='ssid' required>"
+        "<label>WiFi Password</label><input type='password' name='password'>"
+        "<label>Server IP (RTP sender)</label><input name='server_ip' placeholder='192.168.1.100'>"
+        "<label>Server Port</label><input name='server_port' value='1234'>"
+        "<button type='submit'>Save &amp; Connect</button></form>"
+        "</body></html>";
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, html, strlen(html));
+    return ESP_OK;
+}
+
+/* url-decode a single form value into out (returns count written). */
+static size_t url_decode(const char *src, char *out, size_t max)
+{
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o < max - 1; i++) {
+        if (src[i] == '%' && i + 2 < strlen(src)) {
+            int hi = isxdigit(src[i+1]) ? (isdigit(src[i+1]) ? src[i+1]-'0' :
+                  (src[i+1]|0x20)-'a'+10) : 0;
+            int lo = isxdigit(src[i+2]) ? (isdigit(src[i+2]) ? src[i+2]-'0' :
+                  (src[i+2]|0x20)-'a'+10) : 0;
+            out[o++] = (char)((hi << 4) | lo);
+            i += 2;
+        } else if (src[i] == '+') {
+            out[o++] = ' ';
+        } else {
+            out[o++] = src[i];
+        }
+    }
+    out[o] = '\0';
+    return o;
+}
+
+static esp_err_t portal_save_handler(httpd_req_t *req)
+{
+    static char *keys[] = { "ssid", "password", "server_ip", "server_port", NULL };
+    char vals[4][64] = {{0}};
+
+    /* Read request body (form-encoded), bounded. */
+    char body[1024];
+    int off = 0;
+    while (off < (int)sizeof(body)) {
+        int n = httpd_req_recv(req, body + off, 1);
+        if (n <= 0) break;
+        off += n;
+    }
+    if (off <= 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty body");
+        return ESP_OK;
+    }
+    body[off] = '\0';
+
+    /* Split on '&', decode each known k=v. */
+    char *tok = body, *save = NULL;
+    while ((tok = strtok_r(tok, "&", &save)) != NULL) {
+        const char *eq = strchr(tok, '=');
+        if (!eq) continue;
+        size_t klen = eq - tok;
+        for (int k = 0; k < 4; k++) {
+            if (keys[k] && strlen(keys[k]) == klen && strncmp(tok, keys[k], klen) == 0) {
+                url_decode(eq + 1, vals[k], sizeof(vals[k]));
+                break;
+            }
+        }
+        tok = save;
+    }
+
+    if (!vals[0][0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing ssid");
+        return ESP_OK;
+    }
+    snprintf(node_cfg.ssid, sizeof(node_cfg.ssid), "%.32s", vals[0]);
+    if (vals[1][0]) snprintf(node_cfg.password, sizeof(node_cfg.password), "%.63s", vals[1]);
+    if (vals[2][0]) snprintf(node_cfg.server_ip, sizeof(node_cfg.server_ip), "%.15s", vals[2]);
+    if (vals[3][0]) node_cfg.server_port = (uint16_t)atoi(vals[3]);
+    node_cfg.has_server = (vals[2][0] != 0) ? 1 : 0;
+
+    if (cfg_save() != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs write failed");
+        return ESP_OK;
+    }
+    printf("cfg: saved via portal (SSID=%s server=%s:%u)\n",
+           node_cfg.ssid, node_cfg.server_ip, (unsigned)node_cfg.server_port);
+
+    httpd_resp_sendstr(req, "Saved. Rebooting into STA mode...");
+    vTaskDelay(pdMS_TO_TICKS(300));
+    esp_restart();
+    return ESP_OK;
+}
+
+static void setup_ap_start(void)
+{
+    ap_active = 1;
+    net_state = 0;
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    wifi_config_t ap = {
+        .ap = { .ssid = AP_SSID, .ssid_len = strlen(AP_SSID),
+                .channel = 1, .authmode = WIFI_AUTH_OPEN, .max_connection = 4 },
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    /* Power-save OFF (proven fact: required for streaming) */
-    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    /* Static 192.168.4.1 gateway for the AP. */
+    esp_netif_ip_info_t ip;
+    ip.ip.addr      = ESP_IP4TOADDR(192, 168, 4, 1);
+    ip.netmask.addr = ESP_IP4TOADDR(255, 255, 255, 0);
+    ip.gw           = ip.ip;
+    esp_netif_t *ap_if = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    ESP_ERROR_CHECK(esp_netif_set_ip_info(ap_if, &ip));
+    esp_netif_dns_info_t dns;
+    dns.ip = (esp_ip_addr_t)ESP_IP4ADDR_INIT(192, 168, 4, 1);   /* captive dns */
+    esp_netif_set_dns_info(ap_if, ESP_NETIF_DNS_MAIN, &dns);
 
-    /* Wait for connection */
-    xEventGroupWaitBits(wifi_events, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
+    /* Captive portal: HTTP server on :80 */
+    httpd_handle_t hd = NULL;
+    httpd_config_t hcfg = HTTPD_DEFAULT_CONFIG();
+    if (httpd_start(&hd, &hcfg) != ESP_OK) {
+        printf("setup ap: httpd failed\n");
+    } else {
+        httpd_uri_t get_uri  = { .uri = "/", .method = HTTP_GET,  .handler = portal_get_handler };
+        httpd_uri_t save_uri = { .uri = "/save", .method = HTTP_POST, .handler = portal_save_handler };
+        httpd_register_uri_handler(hd, &get_uri);
+        httpd_register_uri_handler(hd, &save_uri);
+    }
+    printf("setup ap: running 'AudioNode-Setup' open AP, portal http://%s/\n", AP_GATEWAY);
+}
+
+/* ── P3: failover — STA no IP in 30 s → return to setup AP (keep NVS) ── */
+static void failover_task(void *arg)
+{
+    int64_t sta_start = 0;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (ap_active) continue;               /* already in setup AP */
+        if (net_state >= 1) { sta_start = 0; continue; }  /* got IP, all good */
+        if (sta_start == 0) sta_start = esp_timer_get_time();   /* us */
+        if (esp_timer_get_time() - sta_start > (int64_t)STA_FAIL_TIMEOUT_MS * 1000) {
+            printf("failover: no IP in %d ms, opening setup AP (NVS kept)\n",
+                   STA_FAIL_TIMEOUT_MS);
+            esp_wifi_stop();
+            setup_ap_start();
+            sta_start = 0;
+        }
+    }
 }
 
 /* M1 check: print RSSI every 10s */
@@ -236,7 +455,7 @@ void audio_pump_task(void *arg)
                    replaying the last buffer (= harsh buzzing noise) */
                 memset(buf, 0, 256 * 4);
                 frames = 256;
-                esp_err_t ret = i2s_channel_write(tx_chan, buf, frames * 4, &written, portMAX_DELAY);
+                i2s_channel_write(tx_chan, buf, frames * 4, &written, portMAX_DELAY);
                 vTaskDelay(pdMS_TO_TICKS(2));
                 continue;
             }
@@ -311,75 +530,111 @@ static void led_task(void *arg)
     }
 }
 
-/* M3: TCP stream receiver — board connects TO the PC; server sends raw PCM */
-static void tcp_task(void *arg)
+/* P1: RTP L16 over UDP receiver — board is a UDP listener (server sends TO the board).
+   Replaces the TCP client transport. The board listens on UDP 1234;
+   the sender sends RTP datagrams (PT=96, 48kHz/16-bit/mono, 20ms frames) to
+   board_ip:1234. Every datagram is validated before feeding PCM to the ring.
+   Missing packets -> silence fill; never block I2S on a lost UDP packet. */
+static void udp_task(void *arg)
 {
-    static uint8_t rx[4096];
-    /* wait: let stale connections from a previous boot die out */
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    while (1) {
-        struct sockaddr_in dest = {0};
-        dest.sin_addr.s_addr = inet_addr(PC_SERVER_IP);
-        dest.sin_family = AF_INET;
-        dest.sin_port = htons(PC_SERVER_PORT);
-
-        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-        if (sock < 0 || ring_buf == NULL) { printf("tcp: socket/ring not ready\n"); vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
-
-        printf("tcp: connecting to %s:%d ...\n", PC_SERVER_IP, PC_SERVER_PORT);
-        if (connect(sock, (struct sockaddr *)&dest, sizeof(dest)) == 0) {
-            struct sockaddr_in local;
-            socklen_t slen = sizeof(local);
-            getsockname(sock, (struct sockaddr *)&local, &slen);
-            printf("tcp: CONNECTED — stream ready (local port %d, t=%lld ms)\n", ntohs(local.sin_port), esp_timer_get_time() / 1000);
-            play_mode = 1;
-            net_state = 2;   /* streaming */
-            /* prefill ~330ms before starting playback (jitter headroom;
-               16KB was too thin on weak WiFi/power setups) */
-            int64_t pf0 = esp_timer_get_time();
-            while (ring_used() < 65536 && esp_timer_get_time() - pf0 < 2000000) {
-                vTaskDelay(pdMS_TO_TICKS(2));
-            }
-            uint64_t total = 0;
-            int64_t last_log = 0;
-            while (1) {
-                /* never drop: if the ring is nearly full, wait instead of
-                   recv-ing. A dropped byte would shift the whole stream into
-                   permanent noise. TCP backpressure throttles the sender. */
-                if (ring_free() < 4096) {
-                    vTaskDelay(pdMS_TO_TICKS(2));
-                    continue;
-                }
-                int len = recv(sock, rx, sizeof(rx), 0);
-                if (len > 0) {
-                    int w = ring_write(rx, len);
-                    total += w;
-                    if (w < len) printf("tcp: ring full, dropped %d\n", len - w);
-                    int64_t now = esp_timer_get_time();
-                    if (now - last_log > 5000000) {   /* log at most every 5s (USB CDC printf disturbs audio) */
-                        printf("tcp: total=%llu ring=%d pump=%lu (t=%lld ms)\n",
-                               (unsigned long long)total, ring_used(),
-                               (unsigned long)pump_chunks, (long long)(now / 1000));
-                        last_log = now;
-                    }
-                } else if (len == 0) {
-                    printf("tcp: stream end (%llu bytes) t=%lld ms\n", total, esp_timer_get_time() / 1000);
-                    break;
-                } else {
-                    printf("tcp: recv err errno=%d after %llu bytes (t=%lld ms)\n", errno, total, esp_timer_get_time() / 1000);
-                    break;
-                }
-            }
-            /* flush so audio stops promptly after stream end */
-            ring_flush();
-            play_mode = 2;
-            net_state = 1;   /* back to waiting */
-        } else {
-            printf("tcp: connect failed (errno=%d), retry\n", errno);
-        }
-        close(sock);
+    /* UDP socket bound to port 1234 */
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        printf("udp: socket failed (errno=%d)\n", errno);
         vTaskDelay(pdMS_TO_TICKS(2000));
+        return;
     }
+
+    struct sockaddr_in local = {0};
+    local.sin_family = AF_INET;
+    local.sin_addr.s_addr = INADDR_ANY;
+    local.sin_port = htons(UDP_PORT);
+
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    if (bind(sock, (struct sockaddr *)&local, sizeof(local)) < 0) {
+        printf("udp: bind failed (errno=%d)\n", errno);
+        close(sock);
+        return;
+    }
+
+    printf("udp: listening on 0.0.0.0:%d, waiting for RTP L16 (PT=%d)...\n",
+           UDP_PORT, RTP_PT);
+
+    static uint8_t rx_buf[2048];            /* RTP hdr (12) + PCM (1920) = 1932 */
+    struct sockaddr_in peer;
+    socklen_t peer_len = sizeof(peer);
+    uint16_t last_seq = 0;
+    int first_packet = 1;
+    uint64_t total = 0;
+    uint32_t pkts = 0, dropped = 0;
+    int64_t last_log = 0;
+
+    while (1) {
+        int len = recvfrom(sock, rx_buf, sizeof(rx_buf), 0,
+                           (struct sockaddr *)&peer, &peer_len);
+        if (len < 0) {
+            printf("udp: recvfrom err=%d\n", errno);
+            continue;
+        }
+        if (ring_buf == NULL) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
+        /* --- RTP header validation (before touching the ring) --- */
+        if (len < 12) continue;                              /* no RTP header */
+        if ((rx_buf[0] >> 6) != 2) continue;                  /* version != 2  */
+        if ((rx_buf[1] & 0x7F) != RTP_PT) continue;           /* PT != 96       */
+
+        uint16_t seq = (rx_buf[2] << 8) | rx_buf[3];
+        (void)rx_buf;  /* ts parsed below but not used for diagnostics */
+
+        /* Source-IP whitelist (0 = accept any; set by NVS in P3) */
+        if (configured_server_ip &&
+            peer.sin_addr.s_addr != configured_server_ip) {
+            continue;
+        }
+
+        int payload_len = len - 12;
+        if (payload_len < FRAME_BYTES) continue;             /* too short */
+
+        /* --- Sequence / gap detection --- */
+        if (!first_packet) {
+            uint16_t expected = (last_seq + 1) & 0xFFFF;
+            if (seq != expected && seq != last_seq) {        /* not next, not dup */
+                uint16_t gap = (seq - expected) & 0xFFFF;
+                if (gap > 64) gap = 1;  /* cap runaway gap */
+                dropped += gap;
+                /* fill missing frames with silence */
+                uint8_t silence[FRAME_BYTES];
+                memset(silence, 0, FRAME_BYTES);
+                for (uint16_t g = 0; g < gap; g++) {
+                    (void)ring_write(silence, FRAME_BYTES);
+                }
+            }
+        }
+        first_packet = 0;
+        last_seq = seq;
+
+        /* --- Write validated PCM payload to ring --- */
+        int w = ring_write(rx_buf + 12, FRAME_BYTES);
+        total += w;
+        pkts++;
+
+        play_mode = 1;
+        net_state = 2;   /* streaming */
+
+        int64_t now = esp_timer_get_time();
+        if (now - last_log > 5000000) {
+            printf("udp: pkts=%lu dropped=%lu ring=%d pcm=%llu bytes (t=%lld ms)\n",
+                   (unsigned long)pkts, (unsigned long)dropped, ring_used(),
+                   (unsigned long long)total, (long long)(now / 1000));
+            last_log = now;
+        }
+    }
+    close(sock);
 }
 
 void app_main(void)
@@ -411,15 +666,40 @@ void app_main(void)
     /* Pump runs in its own task: keeps app_main free (avoids task watchdog timeout) */
     xTaskCreate(audio_pump_task, "audio_pump", 4096, NULL, 5, NULL);
 
-    /* WiFi */
+    /* ── WiFi: init stack once, then decide STA vs setup-AP from NVS ── */
+    /* NVS partition MUST be ready before esp_wifi_init (wifi stores its own data there). */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    wifi_init();
-    printf("wifi connected, power-save OFF\n");
+
+    ESP_ERROR_CHECK(esp_netif_init());
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
+    {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    }
+    wifi_events = xEventGroupCreate();
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+
+    /* Load config; first boot (or NVS wiped) seeds the factory defaults. */
+    if (cfg_load() != ESP_OK) cfg_factory_seed();
+    cfg_apply_server_whitelist();
+
+    if (node_cfg.ssid[0]) {
+        sta_mode_start();
+        printf("wifi: STA mode, power-save OFF, listening on :%d\n", UDP_PORT);
+    } else {
+        printf("wifi: no SSID configured, starting setup AP\n");
+        setup_ap_start();
+    }
+
     xTaskCreate(rssi_task, "rssi", 3072, NULL, 3, NULL);
-    xTaskCreate(tcp_task, "tcp", 4096, NULL, 4, NULL);
+    xTaskCreate(failover_task, "failover", 3072, NULL, 2, NULL);
+    xTaskCreate(udp_task, "udp", 8192, NULL, 4, NULL);
 }

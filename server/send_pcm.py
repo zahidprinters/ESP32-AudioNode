@@ -1,206 +1,112 @@
 #!/usr/bin/env python3
-"""send_pcm.py — canonical TCP test sender (single file, no duplicates).
-
-Modes:
-  server:  python send_pcm.py server [port]      — accept one board connection, log traffic (M2 test)
-  stream:  python send_pcm.py stream <ip> [port] [seconds] [freq] [vol]
-           — connect to... no: board is client, so 'stream' LISTENS and sends tone PCM
-             python send_pcm.py stream [port] [seconds] [freq] [vol]
-
+"""RTP L16/UDP sender. Modes: tone, file, loop.
 Examples:
-  python send_pcm.py server                 # M2: just accept + log
-  python send_pcm.py stream 60 1000 0.5     # M3: send 60s of 1kHz tone at 0.5 vol to first board that connects
-  python send_pcm.py file song.mp3 1234 1.0 # stream a real audio file (mp3 etc.) decoded to 48k/16b/mono PCM
-  python send_pcm.py loop 1234 1.0          # VLC mode: stream PC speaker output (VLC controls everything)
-"""
-import socket
-import struct
-import sys
-import math
-import time
+  python send_pcm.py tone <board-ip> 1234 30 1000 0.5
+  python send_pcm.py file song.mp3 <board-ip> 1234 0.7
+  python send_pcm.py loop <board-ip> 1234 0.8
+RTP hdr (12 bytes, net order): V=2(0x80)|PT=96(0x60), seq(+1), ts(+960=samples), SSRC=0xDEADBEEF"""
+import socket, struct, sys, math, time
 
-SR = 48000  # 16-bit mono
+SR = 48000; FRAME_SAMPLES = 960; FRAME_BYTES = FRAME_SAMPLES * 2; RTP_PT = 96; SSRC = 0xDEADBEEF
 
-def make_tone_chunk(freq, vol, start_sample, n):
-    out = bytearray()
-    amp = int(32000 * vol)
-    for i in range(n):
+def make_rtp_header(seq, ts):
+    return struct.pack("!BBHII", 0x80, RTP_PT, seq & 0xFFFF, ts, SSRC)
+
+def make_tone_frame(freq, vol, start_sample):
+    out = bytearray(); amp = int(32000 * vol)
+    for i in range(FRAME_SAMPLES):
         v = int(amp * math.sin(2 * math.pi * freq * (start_sample + i) / SR))
         out += struct.pack("<h", v)
     return out
 
-def server_mode(port):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", port))
-    s.listen(1)
-    print(f"listening on 0.0.0.0:{port} ...")
-    conn, addr = s.accept()
-    print(f"ACCEPTED connection from {addr[0]}:{addr[1]}")
-    try:
-        total = 0
-        conn.settimeout(60)
-        while True:
-            data = conn.recv(4096)
-            if not data:
-                print("client disconnected")
-                break
-            total += len(data)
-            print(f"recv {len(data)} bytes (total {total})")
-    except socket.timeout:
-        print("idle timeout (60s) — closing")
-    finally:
-        conn.close()
-        s.close()
-
-def stream_mode(port, seconds, freq, vol):
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", port))
-    s.listen(1)
-    print(f"listening on 0.0.0.0:{port} — waiting for board...")
-    conn, addr = s.accept()
-    print(f"ACCEPTED connection from {addr[0]}:{addr[1]} at t={time.time():.2f} — streaming {freq}Hz for {seconds}s", flush=True)
-    print(f"sent first chunk t={time.time():.2f}", flush=True)
-    conn.sendall(make_tone_chunk(freq, vol, 0, 1024))
-    start = 1024
-    sent = 2048
-    t0 = time.time()
-    chunk_samples = 1024
+def tone_mode(ip, port, seconds, freq, vol):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print(f"sending RTP tone {freq}Hz to {ip}:{port} for {seconds}s (vol={vol})", flush=True)
+    seq = 0; ts = 0; start_sample = 0; t0 = time.time()
     try:
         while (time.time() - t0) < seconds:
-            chunk = make_tone_chunk(freq, vol, start, chunk_samples)
-            conn.sendall(chunk)
-            start += chunk_samples
-            sent += len(chunk)
-            # real-time pacing: 1024 samples = 21.33ms per chunk
-            target = sent / (2 * SR)
-            lag = target - (time.time() - t0)
-            if lag > 0:
-                time.sleep(lag)
-            print(f"sent {sent} bytes ({sent/(2*SR):.1f}s of audio) t={time.time():.2f}")
-        print(f"\ndone: sent {sent} bytes in {time.time()-t0:.1f}s")
-    except (BrokenPipeError, ConnectionResetError) as e:
-        print(f"\nconnection lost: {e}")
-    finally:
-        conn.close()
-        s.close()
+            sock.sendto(make_rtp_header(seq, ts) + make_tone_frame(freq, vol, start_sample), (ip, port))
+            seq += 1; ts += FRAME_SAMPLES; start_sample += FRAME_SAMPLES
+            target = ts / SR; lag = target - (time.time() - t0)
+            if lag > 0: time.sleep(lag)
+            if seq % 50 == 0: print(f"  sent {seq} frames ({seq * FRAME_SAMPLES / SR:.1f}s)", flush=True)
+        print(f"done: {seq} frames ({seq * FRAME_SAMPLES / SR:.1f}s) in {time.time()-t0:.1f}s")
+    except KeyboardInterrupt: print(f"\ninterrupted after {seq}")
+    finally: sock.close()
 
-def file_mode(path, port, vol):
-    """Listen for the board, then decode an audio file (mp3 etc.) via ffmpeg
-    to 48kHz/16-bit/mono PCM and stream it in real time."""
-    import subprocess
-    import imageio_ffmpeg
+def file_mode(path, ip, port, vol):
+    import subprocess, imageio_ffmpeg
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", port))
-    s.listen(1)
-    print(f"listening on 0.0.0.0:{port} — waiting for board... (file: {path})")
-    conn, addr = s.accept()
-    print(f"ACCEPTED connection from {addr[0]}:{addr[1]} — streaming file", flush=True)
-    # decode: 48kHz, mono, 16-bit LE raw PCM on stdout.
-    # chain (anti-bass-masking + reduced overall volume for 2-inch speaker):
-    #   highpass 180Hz → bass shelf -16dB@220 → heavy compressor → limiter
-    #   → volume 0.30 (board x2 gain → 0.6 peak, comfortably below clipping).
-    proc = subprocess.Popen(
-        [ffmpeg, "-v", "error", "-i", path, "-ac", "1", "-ar", str(SR),
-         "-f", "s16le",
-         "-af", f"highpass=f=180,bass=g=-16:f=220,acompressor=threshold=0.2:ratio=5:attack=15:release=200,alimiter=limit=0.75,volume={0.30 * vol}",
-         "pipe:1"],
-        stdout=subprocess.PIPE)
-    sent = 0
-    t0 = None
-    chunk = 4096  # 1024 samples = 21.33ms per chunk
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print(f"sending RTP file '{path}' to {ip}:{port} (vol={vol})", flush=True)
+    cmd = [ffmpeg, "-i", path,
+           "-af", f"highpass=f=150,equalizer=f=200:width_type=h:width=100:g=-12,"
+                  f"acompressor=threshold=-20dB:ratio=4:attack=5:release=100,"
+                  f"alimiter=limit=0.75,volume={vol}",
+           "-ar", str(SR), "-ac", "1", "-f", "s16le", "-loglevel", "error", "-"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    seq = 0; ts = 0; sent = 0; t0 = None
     try:
         while True:
-            pcm = proc.stdout.read(chunk)
-            if not pcm:
-                break
-            # real-time pacing: bytes/2 = samples; samples/SR = seconds
-            sent += len(pcm)
-            target = sent / (2 * SR)
-            if t0 is None:
-                t0 = time.time()
+            pcm = proc.stdout.read(FRAME_BYTES)
+            if not pcm or len(pcm) < FRAME_BYTES: break
+            sock.sendto(make_rtp_header(seq, ts) + pcm, (ip, port))
+            seq += 1; ts += FRAME_SAMPLES; sent += len(pcm)
+            if t0 is None: t0 = time.time()
             else:
-                lag = target - (time.time() - t0)
-                if lag > 0:
-                    time.sleep(lag)
-            conn.sendall(pcm)
-            if sent % (chunk * 50) == 0:
-                print(f"sent {sent} bytes ({sent/(2*SR):.1f}s of audio)", flush=True)
-        print(f"\ndone: sent {sent} bytes ({sent/(2*SR):.1f}s) in {time.time()-t0:.1f}s")
-    except (BrokenPipeError, ConnectionResetError) as e:
-        print(f"\nconnection lost: {e}")
-    finally:
-        proc.kill()
-        conn.close()
-        s.close()
+                target = ts / SR; lag = target - (time.time() - t0)
+                if lag > 0: time.sleep(lag)
+            if seq % 50 == 0: print(f"  sent {seq} frames ({seq * FRAME_SAMPLES / SR:.1f}s)", flush=True)
+        elapsed = time.time() - t0 if t0 else 0
+        print(f"done: {seq} frames ({seq * FRAME_SAMPLES / SR:.1f}s) in {elapsed:.1f}s")
+    except KeyboardInterrupt: print(f"\ninterrupted after {seq}")
+    finally: proc.kill(); sock.close()
 
-def loop_mode(port, vol):
-    """VLC mode: capture the PC's speaker output (WASAPI loopback — whatever
-    VLC is playing) and stream it to the board in real time. VLC controls
-    play/pause/volume; the board mirrors the PC speakers."""
-    import numpy as np
-    import pyaudiowpatch as pyaudio
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", port))
-    s.listen(1)
-    print(f"listening on 0.0.0.0:{port} — waiting for board... (VLC loopback mode)")
-    conn, addr = s.accept()
-    print(f"ACCEPTED connection from {addr[0]}:{addr[1]} — streaming PC audio loopback", flush=True)
+def loop_mode(ip, port, vol):
+    import numpy as np, pyaudiowpatch as pyaudio
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    print(f"sending RTP loopback to {ip}:{port} (vol={vol})", flush=True)
     pa = pyaudio.PyAudio()
     dev = pa.get_default_wasapi_loopback()
-    ch = int(dev["maxInputChannels"])
-    rate = int(dev["defaultSampleRate"])
-    print(f"loopback device: {dev['name']} ({ch}ch @ {rate}Hz)", flush=True)
-    frames = 1024
-    sent = 0
+    ch = int(dev["maxInputChannels"]); rate = int(dev["defaultSampleRate"])
+    print(f"loopback: {dev['name']} ({ch}ch @ {rate}Hz)", flush=True)
+    frames = FRAME_SAMPLES if rate == SR else int(round(FRAME_SAMPLES * rate / SR))
+    seq = 0; ts = 0; sent = 0
+    stream = pa.open(format=pyaudio.paInt16, channels=ch, rate=rate,
+                     input=True, input_device_index=dev["index"], frames_per_buffer=frames)
     try:
-        stream = pa.open(format=pyaudio.paInt16, channels=ch, rate=rate,
-                         input=True, input_device_index=dev["index"],
-                         frames_per_buffer=frames)
         while True:
             raw = stream.read(frames, exception_on_overflow=False)
-            x = np.frombuffer(raw, dtype="<i2").astype(np.float64)
-            x = x.reshape(-1, ch).mean(axis=1)              # stereo → mono mixdown
-            if rate != SR:                                   # resample to 48k
+            x = np.frombuffer(raw, dtype="<i2").astype(np.float64).reshape(-1, ch).mean(axis=1)
+            if rate != SR:
                 n_out = int(round(len(x) * SR / rate))
                 x = np.interp(np.linspace(0, len(x) - 1, n_out), np.arange(len(x)), x)
+            if len(x) > FRAME_SAMPLES: x = x[:FRAME_SAMPLES]
+            elif len(x) < FRAME_SAMPLES: x = np.pad(x, (0, FRAME_SAMPLES - len(x)))
             pcm = (np.clip(x * vol, -32767, 32767)).astype("<i2").tobytes()
-            conn.sendall(pcm)
-            sent += len(pcm)
-            if sent % (frames * 2 * 50) == 0:
-                print(f"sent {sent} bytes ({sent/(2*SR):.1f}s)", flush=True)
-    except (BrokenPipeError, ConnectionResetError) as e:
-        print(f"\nconnection lost: {e}")
-    except Exception as e:
-        print(f"\nloopback error: {e}")
+            sock.sendto(make_rtp_header(seq, ts) + pcm, (ip, port))
+            seq += 1; ts += FRAME_SAMPLES; sent += len(pcm)
+            if seq % 50 == 0: print(f"  sent {seq} frames ({seq * FRAME_SAMPLES / SR:.1f}s)", flush=True)
+    except KeyboardInterrupt: print(f"\ninterrupted after {seq}")
     finally:
         try: stream.stop_stream(); stream.close()
         except Exception: pass
-        pa.terminate()
-        conn.close()
-        s.close()
+        pa.terminate(); sock.close()
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "server":
-        server_mode(int(sys.argv[2]) if len(sys.argv) > 2 else 1234)
-    elif len(sys.argv) >= 2 and sys.argv[1] == "stream":
-        port = int(sys.argv[2]) if len(sys.argv) > 2 else 1234
-        secs = int(sys.argv[3]) if len(sys.argv) > 3 else 30
-        freq = int(sys.argv[4]) if len(sys.argv) > 4 else 1000
-        vol = float(sys.argv[5]) if len(sys.argv) > 5 else 0.5
-        stream_mode(port, secs, freq, vol)
-    elif len(sys.argv) >= 3 and sys.argv[1] == "file":
-        path = sys.argv[2]
-        port = int(sys.argv[3]) if len(sys.argv) > 3 else 1234
-        vol = float(sys.argv[4]) if len(sys.argv) > 4 else 1.0
-        file_mode(path, port, vol)
-    elif len(sys.argv) >= 2 and sys.argv[1] == "loop":
-        port = int(sys.argv[2]) if len(sys.argv) > 2 else 1234
-        vol = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
-        loop_mode(port, vol)
-    else:
-        print(__doc__)
+    if len(sys.argv) < 2: print(__doc__)
+    elif sys.argv[1] == "tone":
+        tone_mode(sys.argv[2] if len(sys.argv) > 2 else "<board-ip>",
+                  int(sys.argv[3]) if len(sys.argv) > 3 else 1234,
+                  int(sys.argv[4]) if len(sys.argv) > 4 else 30,
+                  int(sys.argv[5]) if len(sys.argv) > 5 else 1000,
+                  float(sys.argv[6]) if len(sys.argv) > 6 else 0.5)
+    elif sys.argv[1] == "file":
+        if len(sys.argv) < 4: print("usage: send_pcm.py file <path> <ip> [port] [vol]"); sys.exit(1)
+        file_mode(sys.argv[2], sys.argv[3], int(sys.argv[4]) if len(sys.argv) > 4 else 1234,
+                  float(sys.argv[5]) if len(sys.argv) > 5 else 0.7)
+    elif sys.argv[1] == "loop":
+        loop_mode(sys.argv[2] if len(sys.argv) > 2 else "<board-ip>",
+                  int(sys.argv[3]) if len(sys.argv) > 3 else 1234,
+                  float(sys.argv[4]) if len(sys.argv) > 4 else 0.8)
+    else: print(__doc__)

@@ -9,8 +9,10 @@
 ## 1. WHERE WE ARE (current focus)
 - Phase: **RTP/UDP product phase** — transitioning the verified TCP audio path to a product-grade WiFi speaker box
 - Production build (verified flashing): DMA-backpressure pump, PSRAM ring buffer, ×2 gain, RGB LED VU/states, 2s boot tone
-- Audio pipeline preserved, transport changing TCP → **RTP L16 over UDP** (48 kHz, 16-bit, mono, 20 ms frames, PT=96, seq+1/frame, ts+960/frame samples)
-- New subsystems to build: setup AP + captive portal + NVS config, STA mode + WiFi failover, UDP RTP listener with packet validation, silence-fill on loss, factory reset (GPIO0 ~5 s hold)
+- Audio pipeline preserved, transport changed TCP → **RTP L16 over UDP** (48 kHz, 16-bit, mono, 20 ms frames, PT=96, seq+1/frame, ts+960/frame samples)
+- **P1 RTP receiver now VERIFIED on hardware (2026-09-13)**: 30 s stream, 1272+ pkts, **dropped=0** — root cause of earlier silence was disabled IP reassembly (see §4)
+- **P3 STA-from-NVS verified**: boots → cfg blob from NVS → joins <ssid> → GOT IP <board-ip>, no premature failover
+- P2 setup AP + captive portal: code implemented, NOT yet verified on hardware (needs NVS-erase/failover test)
 - Known pitfall: stale zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` + kill monitor wrappers, verify 0 pythons, before any run
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
@@ -19,14 +21,14 @@
 |---|---|---|---|
 | Project scaffold (CMake, main, sdkconfig) | ✅ DONE | `audio_node/` | esp32s3 target, builds with IDF v6.1, PSRAM octal enabled |
 | M4: TCP 2-min acceptance (data path verified) | ✅ DONE (archived) | `main/main.c` | 2-min run 0 drops 0 errors, prompt stop — data path proven, protocol now superseded by RTP/UDP |
-| **P1: RTP L16 over UDP receiver + validation** | 🚧 DESIGN | `main/main.c` (new / transport) | UDP recv 1234, RTP header validation (v=2, PT=96, seq+ts), source-IP whitelist, silence-fill on loss. Never block I2S on missing UDP. |
-| **P2: Setup AP + captive portal** | 🔲 TODO (next) | `main/main.c` | SoftAP `AudioNode-Setup`, HTTP server, config page (WiFi SSID/pw, server IP, port) |
-| **P3: STA mode + WiFi failover** | 🔲 TODO | `main/main.c` | Connect to configured WiFi; on success start RTP listener; ~30 s failure → back to AP (keep NVS); WiFi drop → auto-reconnect (no erase) |
+| **P1: RTP L16 over UDP receiver + validation** | ✅ VERIFIED 2026-09-13 | `main/main.c` | UDP recv 1234, RTP header validation (v=2, PT=96), source-IP whitelist, seq-gap silence-fill, 5 s stats. Required `CONFIG_LWIP_IP4_REASSEMBLY=y` (1932 B frames > MTU 1500 arrive fragmented). 30 s stream 1272+ pkts dropped=0 |
+| **P2: Setup AP + captive portal** | 🚧 CODE DONE, HW-UNVERIFIED | `main/main.c` | SoftAP `AudioNode-Setup` open AP @192.168.4.1, httpd `/` form + `/save` POST → NVS blob → reboot to STA. Needs on-hardware test (erase NVS or failover to reach AP mode) |
+| **P3: STA mode + WiFi failover** | ✅ VERIFIED 2026-09-13 | `main/main.c` | NVS cfg blob (SSID/pass/server ip:port) w/ first-boot factory seed; STA join verified (GOT IP, no failover). Failover task: no IP in 30 s → setup AP (NVS kept); wifi drop → auto-reconnect (NVS kept). Failover→AP path not yet exercised on HW |
 | **P4: Factory reset (GPIO0)** | 🔲 TODO (next) | `main/main.c` | BOOT button (GPIO0) held ~5 s → erase NVS → reboot to setup AP. Short presses ignored. WiFi loss does NOT erase NVS |
 | **P5: RGB LED states (setup/AP/STAnstreaming/VU)** | ✅ DONE | `main/main.c` | Preserved from TCP build; red / blue breathing / VU, unchanged |
 | **P6: PSRAM ring buffer (jitter cushion)** | ✅ DONE | `main/main.c` | Preserved; UDP-RX writes validated PCM, pump pulls — unchanged |
 | **P7: DMA-backpressure pump** | ✅ DONE | `main/main.c` | Preserved; no fixed sleep — unchanged |
-| **P8: RTP sender (Python, file/loop/tone)** | 🔲 TODO | `server/send_pcm.py` | Rewrite TCP sender to RTP UDP; file (ffmpeg), loop (WASAPI Win, future Mac/Linux), tone |
+| **P8: RTP sender (Python, file/loop/tone)** | ✅ DONE+USED 2026-09-13 | `server/send_pcm.py` | RTP UDP sender with tone/file/loop submodes; 30 s tone @50 fps delivered 1500 frames to board (P1 receive verified against it) |
 | **P9: Multi-node unicast** | 🔲 TODO (later) | `server/send_pcm.py` | Send same RTP stream to each board IP:port |
 | **P10: Audio gain chain (amp quirk)** | ✅ DONE | `main/main.c` + sender | ×2 digital gain on board (SD pin=VDD → 3 dB amp min → +6 dB); sender headroom — unchanged |
 
@@ -45,6 +47,9 @@
 **New production protocol:** None yet — entering RTP/UDP build phase.
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
+- ❌ **(2026-09-13) UDP datagrams 1932 B with `CONFIG_LWIP_IP4_REASSEMBLY` disabled** — every RTP frame (1932 B > 1500 MTU) arrives IP-fragmented and lwIP silently drops it: recvfrom blocks forever, ping still works, reverse path (board→PC 2 B probe) works. Root cause of "RTP receiver never fires". FIX: `CONFIG_LWIP_IP4_REASSEMBLY=y` in sdkconfig.defaults. With default `IP_REASS_MAX_PBUFS=10` there was still ~5% seq-drop; 20 → dropped=0.
+- ❌ **(2026-09-13) `esp_wifi_init()` before `nvs_flash_init()`** — boot loop: `W (915) wifi:osi_nvs_open fail ret=4353`, `ESP_ERR_NVS_NOT_INITIALIZED` panic via ESP_ERROR_CHECK in app_main. FIX: NVS init must run FIRST in app_main, before netif/wifi init.
+- ❌ **(2026-09-13) failover task ms/µs unit mismatch** — compared µs against `STA_FAIL_TIMEOUT_MS/1000` (=30) → AP mode fired ~30 ms after STA start, even though STA connected at 1.3 s. FIX: keep everything in µs (`(int64_t)STA_FAIL_TIMEOUT_MS * 1000`).
 | Date | What we tried | Exact error/symptom | Why failed (root cause) | Outcome |
 |---|---|---|---|---|
 | — | — | — | — | — |
@@ -113,13 +118,13 @@
 - Before creating any file: check §2 + existing tree; extend existing files instead of adding new ones.
 
 ## 11. NEXT STEPS (ordered)
-1. ✅ Documentation: README.md, ARCHITECTURE.md, SERVER_SETUP.md, GUIDELINES.md, PROJECT_STATE updated for RTP/UDP product phase
-2. 📝 P1: Implement RTP L16 UDP receiver + validation in `main/main.c` (reuse I2S/ring/pump/gain/LED)
-3. 🔲 P2+P3: Setup AP + captive portal + NVS config + STA mode + WiFi failover in `main/main.c`
-4. 🔲 P4: Factory reset (GPIO0 ~5 s hold) in `main/main.c`
-5. 🔲 P8: Rewrite `server/send_pcm.py` → RTP UDP sender (file/loop/tone submodes)
+1. ✅ P1 RTP UDP receiver — VERIFIED on HW (30 s stream, 1272+ pkts, dropped=0) after IP-reassembly fix
+2. ✅ P3 STA-from-NVS — VERIFIED on HW (GOT IP, RSSI -43, listening :1234)
+3. 🔲 P2 on-HW verify: erase NVS (or power a board with no cfg) → AudioNode-Setup AP appears → connect → portal loads → Save → reboots into STA
+4. 🔲 P4: Factory reset (GPIO0 ~5 s hold → NVS erase → setup AP) in `main/main.c`
+5. 🔲 P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept); portal Save → NVS blob → STA
 6. 🔲 P5: Verify multi-node (send to 2+ board IPs)
-7. 🔲 Build → flash → test each milestone → commit only if verified
+7. 🔲 Commit each verified milestone only
 
 ## 12. DEV TOOLING (2026-09-11, non-firmware)
 - Cline global tooling installed (details: `logs/2026-09-11_cline-global-tooling.md`): ponytail rule
