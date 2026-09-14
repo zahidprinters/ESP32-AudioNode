@@ -109,8 +109,6 @@ static inline int16_t gain_clip(int32_t s)
 }
 
 /* ── P2+P3: NVS config, setup AP + captive portal, STA mode + failover ── */
-#define CONFIG_SSID     "<ssid>"       /* first-boot seed, overrides via setup AP */
-#define CONFIG_PASS     "<password>"
 #define CFG_NS          "cfg"
 #define CFG_BLOB_KEY    "wifi"
 #define AP_SSID         "AudioNode-Setup"
@@ -153,20 +151,6 @@ static esp_err_t cfg_load(void)
     nvs_close(h);
     if (e == ESP_OK) cfg_loaded = 1;
     return e;
-}
-
-static void cfg_factory_seed(void)
-{
-    /* First boot: seed the lab WiFi so a fresh board joins out of the box.
-       (Server ip = "0.0.0.0" => accept any source, matching pre-NVS P1.) */
-    memset(&node_cfg, 0, sizeof(node_cfg));
-    snprintf(node_cfg.ssid, sizeof(node_cfg.ssid), "%s", CONFIG_SSID);
-    snprintf(node_cfg.password, sizeof(node_cfg.password), "%s", CONFIG_PASS);
-    snprintf(node_cfg.server_ip, sizeof(node_cfg.server_ip), "0.0.0.0");
-    node_cfg.server_port = UDP_PORT;
-    node_cfg.has_server = 0;
-    cfg_save();
-    printf("cfg: first boot, seeded defaults (SSID=%s)\n", node_cfg.ssid);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -335,7 +319,10 @@ static void setup_ap_start(void)
     ip.netmask.addr = ESP_IP4TOADDR(255, 255, 255, 0);
     ip.gw           = ip.ip;
     esp_netif_t *ap_if = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    /* DHCP server is already running (default AP netif): stop -> set IP -> restart */
+    ESP_ERROR_CHECK(esp_netif_dhcps_stop(ap_if));
     ESP_ERROR_CHECK(esp_netif_set_ip_info(ap_if, &ip));
+    ESP_ERROR_CHECK(esp_netif_dhcps_start(ap_if));
     esp_netif_dns_info_t dns;
     dns.ip = (esp_ip_addr_t)ESP_IP4ADDR_INIT(192, 168, 4, 1);   /* captive dns */
     esp_netif_set_dns_info(ap_if, ESP_NETIF_DNS_MAIN, &dns);
@@ -687,8 +674,11 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
 
-    /* Load config; first boot (or NVS wiped) seeds the factory defaults. */
-    if (cfg_load() != ESP_OK) cfg_factory_seed();
+    /* Load config; none in NVS (first boot / factory reset) -> zeroed cfg ->
+       ssid empty -> setup AP (documented spec: first boot runs AudioNode-Setup) */
+    if (cfg_load() != ESP_OK) {
+        printf("cfg: none in NVS (first boot / factory reset)\n");
+    }
     cfg_apply_server_whitelist();
 
     if (node_cfg.ssid[0]) {

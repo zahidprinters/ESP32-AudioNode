@@ -12,7 +12,7 @@
 - Audio pipeline preserved, transport changed TCP → **RTP L16 over UDP** (48 kHz, 16-bit, mono, 20 ms frames, PT=96, seq+1/frame, ts+960/frame samples)
 - **P1 RTP receiver now VERIFIED on hardware (2026-09-13)**: 30 s stream, 1272+ pkts, **dropped=0** — root cause of earlier silence was disabled IP reassembly (see §4)
 - **P3 STA-from-NVS verified**: boots → cfg blob from NVS → joins <ssid> → GOT IP <board-ip>, no premature failover
-- P2 setup AP + captive portal: code implemented, NOT yet verified on hardware (needs NVS-erase/failover test)
+- **P2 setup AP + captive portal VERIFIED on hardware (2026-09-13)**: empty-NVS boot → open AP `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS blob → reboot → STA from NVS (see §4 for the DHCPS boot-loop fix)
 - Known pitfall: stale zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` + kill monitor wrappers, verify 0 pythons, before any run
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
@@ -22,7 +22,7 @@
 | Project scaffold (CMake, main, sdkconfig) | ✅ DONE | `audio_node/` | esp32s3 target, builds with IDF v6.1, PSRAM octal enabled |
 | M4: TCP 2-min acceptance (data path verified) | ✅ DONE (archived) | `main/main.c` | 2-min run 0 drops 0 errors, prompt stop — data path proven, protocol now superseded by RTP/UDP |
 | **P1: RTP L16 over UDP receiver + validation** | ✅ VERIFIED 2026-09-13 | `main/main.c` | UDP recv 1234, RTP header validation (v=2, PT=96), source-IP whitelist, seq-gap silence-fill, 5 s stats. Required `CONFIG_LWIP_IP4_REASSEMBLY=y` (1932 B frames > MTU 1500 arrive fragmented). 30 s stream 1272+ pkts dropped=0 |
-| **P2: Setup AP + captive portal** | 🚧 CODE DONE, HW-UNVERIFIED | `main/main.c` | SoftAP `AudioNode-Setup` open AP @192.168.4.1, httpd `/` form + `/save` POST → NVS blob → reboot to STA. Needs on-hardware test (erase NVS or failover to reach AP mode) |
+| **P2: Setup AP + captive portal** | ✅ VERIFIED 2026-09-13 | `main/main.c` | SoftAP `AudioNode-Setup` open AP @192.168.4.1, httpd `/` form + `/save` POST → NVS blob → reboot to STA. Empty NVS (first boot / factory reset) → setup AP. AP IP requires DHCPS stopped first, and the old factory WiFi seed is removed — see §4 |
 | **P3: STA mode + WiFi failover** | ✅ VERIFIED 2026-09-13 | `main/main.c` | NVS cfg blob (SSID/pass/server ip:port) w/ first-boot factory seed; STA join verified (GOT IP, no failover). Failover task: no IP in 30 s → setup AP (NVS kept); wifi drop → auto-reconnect (NVS kept). Failover→AP path not yet exercised on HW |
 | **P4: Factory reset (GPIO0)** | 🔲 TODO (next) | `main/main.c` | BOOT button (GPIO0) held ~5 s → erase NVS → reboot to setup AP. Short presses ignored. WiFi loss does NOT erase NVS |
 | **P5: RGB LED states (setup/AP/STAnstreaming/VU)** | ✅ DONE | `main/main.c` | Preserved from TCP build; red / blue breathing / VU, unchanged |
@@ -44,12 +44,17 @@
 - RGB LED: red/blue-breathing/VU, 2 s boot tone (user-confirmed working)
 - Download-mode recovery: `esptool -p COM5 run` + `monitor --no-reset`
 
-**New production protocol:** None yet — entering RTP/UDP build phase.
+**RTP/UDP production phase — verified on hardware:**
+- P1 RTP L16/UDP receive: 30 s stream, 1272+ pkts, dropped=0 (needs `CONFIG_LWIP_IP4_REASSEMBLY=y`)
+- P2 setup AP + captive portal: empty NVS → `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS → reboot → STA
+- P3 STA-from-NVS: boot → saved cfg → joins <ssid> → GOT IP <board-ip>
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
 - ❌ **(2026-09-13) UDP datagrams 1932 B with `CONFIG_LWIP_IP4_REASSEMBLY` disabled** — every RTP frame (1932 B > 1500 MTU) arrives IP-fragmented and lwIP silently drops it: recvfrom blocks forever, ping still works, reverse path (board→PC 2 B probe) works. Root cause of "RTP receiver never fires". FIX: `CONFIG_LWIP_IP4_REASSEMBLY=y` in sdkconfig.defaults. With default `IP_REASS_MAX_PBUFS=10` there was still ~5% seq-drop; 20 → dropped=0.
 - ❌ **(2026-09-13) `esp_wifi_init()` before `nvs_flash_init()`** — boot loop: `W (915) wifi:osi_nvs_open fail ret=4353`, `ESP_ERR_NVS_NOT_INITIALIZED` panic via ESP_ERROR_CHECK in app_main. FIX: NVS init must run FIRST in app_main, before netif/wifi init.
 - ❌ **(2026-09-13) failover task ms/µs unit mismatch** — compared µs against `STA_FAIL_TIMEOUT_MS/1000` (=30) → AP mode fired ~30 ms after STA start, even though STA connected at 1.3 s. FIX: keep everything in µs (`(int64_t)STA_FAIL_TIMEOUT_MS * 1000`).
+- ❌ **(2026-09-13) `esp_netif_set_ip_info()` on the AP netif while its DHCPS is running** — panic `ESP_ERROR_CHECK failed: esp_err_t 0x5007 (ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED)` at `setup_ap_start` (main.c:322) → `abort()` → reboot → **setup-AP boot loop** (439 KB of repeated identical panics). The default AP netif already runs DHCPS bound to 192.168.4.1 and refuses an IP change while up. FIX: `esp_netif_dhcps_stop(ap_if)` → `esp_netif_set_ip_info()` → `esp_netif_dhcps_start(ap_if)`.
+- ❌ **(2026-09-13) factory WiFi seed on empty NVS** — `cfg_factory_seed()` wrote lab WiFi (<ssid>/<password>) on first boot, so a fresh board auto-joined the lab instead of running `AudioNode-Setup`. Contradicted the documented spec ("first boot / factory reset → setup AP"). REMOVED: empty NVS now leaves a zeroed cfg → empty SSID → setup AP.
 | Date | What we tried | Exact error/symptom | Why failed (root cause) | Outcome |
 |---|---|---|---|---|
 | — | — | — | — | — |
@@ -69,6 +74,7 @@
 | 10 | 2026-09-08 | PC `10054` + board `recv err errno=104 after 0 bytes` | ghost/stale connection from previous board boot accepted by fresh server (race: server started while board was mid-retry from dead session) | Board: 5s delay before first connect; harness: start monitor BEFORE server; kill orphan pythons between tests | ✅ full 30s stream clean |
 | 11 | 2026-09-08 | zombie python processes survive test harness | Stop-Process kills wrapper pwsh, not python children | harness kills all python after test; kill pythons before each test | ✅ |
 | 12 | 2026-09-10 | board stuck at `rst:0x15 USB_UART_CHIP_RESET, boot:0x0 DOWNLOAD` "waiting for download"; each `idf.py monitor` open re-reset it into download mode | USB-CDC boot-mode latch; unplug/replug normally fixes | With COM5 free: `python -m esptool --chip esp32s3 -p COM5 run` then `idf.py -p COM5 monitor --no-reset`. Harness runs esptool FIRST, then monitor (never concurrently — port conflict) | ✅ no unplug needed |
+| 13 | 2026-09-13 | `ESP_ERROR_CHECK failed: esp_err_t 0x5007 (ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED)` | setup-AP boot loop: `esp_netif_set_ip_info()` called while the AP netif's DHCPS was running (`setup_ap_start`, main.c:322) → abort → reboot, forever | `esp_netif_dhcps_stop()` → `set_ip_info()` → `esp_netif_dhcps_start()` | ✅ AP up at 192.168.4.1 |
 
 ## 6. DECISIONS & REASONS
 
@@ -120,9 +126,9 @@
 ## 11. NEXT STEPS (ordered)
 1. ✅ P1 RTP UDP receiver — VERIFIED on HW (30 s stream, 1272+ pkts, dropped=0) after IP-reassembly fix
 2. ✅ P3 STA-from-NVS — VERIFIED on HW (GOT IP, RSSI -43, listening :1234)
-3. 🔲 P2 on-HW verify: erase NVS (or power a board with no cfg) → AudioNode-Setup AP appears → connect → portal loads → Save → reboots into STA
-4. 🔲 P4: Factory reset (GPIO0 ~5 s hold → NVS erase → setup AP) in `main/main.c`
-5. 🔲 P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept); portal Save → NVS blob → STA
+3. ✅ P2 on-HW verify — VERIFIED 2026-09-13 (empty NVS → `AudioNode-Setup` AP → portal → Save → NVS → reboot → STA, GOT IP)
+4. 🔲 P4: Factory reset (GPIO0 ~5 s hold → NVS erase → setup AP) in `main/main.c` — **IN PROGRESS**
+5.  P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept)
 6. 🔲 P5: Verify multi-node (send to 2+ board IPs)
 7. 🔲 Commit each verified milestone only
 
