@@ -8,6 +8,11 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 ## [unreleased] — RTP/UDP product phase
 
 ### Added
+- **RTP L16/UDP receiver (P1)** — implemented in `main.c`, **verified on hardware 2026-09-13**: 30 s stream, 1272+ packets, `dropped=0`.
+- **Setup AP + captive portal (P2)** — implemented, **verified on hardware 2026-09-13**: empty-NVS boot → open AP `AudioNode-Setup` @192.168.4.1 → form → Save → NVS blob → reboot → STA.
+- **STA mode + WiFi failover (P3)** — implemented, **verified on hardware 2026-09-13**: NVS config on boot → joins WiFi → got IP → RTP listener on :1234, power-save OFF.
+- **Factory reset (P4)** — implemented in `main.c`, **verified on hardware 2026-09-14**: BOOT/GPIO0 held 5 s → `nvs_flash_erase()` → reboot → setup AP (one clean cycle, no panic).
+- **RTP sender (P8)** — `server/send_pcm.py` RTP over UDP with `tone`/`file`/`loop` submodes; used for the P1 verification.
 - **Documentation set**: `README.md`, `ARCHITECTURE.md`, `SERVER_SETUP.md`, `GUIDELINES.md` — full product documentation for the RTP/UDP phase.
 - **RTP L16 protocol spec** in ARCHITECTURE.md: 48 kHz, 16-bit, mono, 20 ms frames, PT=96, seq+1/frame, timestamp +960 in samples.
 - **Packet validation spec**: version=2, PT=96, length, source-IP whitelist, seq/ts sanity checks before ring buffer.
@@ -17,15 +22,18 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ### Changed
 - **Protocol**: TCP → RTP L16 over UDP (production transport). TCP prototype preserved in git history.
-- **`.cline/rules/esp32-audio-node.md`**: milestone order (TCP→RTP UDP receiver), build commands (`env.ps1` instead of `export.bat`), transport (TCP→RTP UDP), network (TCP→UDP), added Setup & config section, GND tie note, proven facts updated.
-- **`.cline/rules/workflow.md`**: milestone order (TCP→RTP UDP receiver).
-- **`PROJECT_STATE.md`**: §1 focus → RTP/UDP phase; §2 feature map P1–P10 (TCP milestones archived); §3 verified (TCP marked archived); §6 decisions & reasons; §8 acceptance criteria; §11 next steps reordered.
+- **First-boot behaviour**: removed the factory WiFi seed — an empty NVS now boots straight into `AudioNode-Setup`, matching the documented spec (the seed silently auto-joined the lab WiFi instead).
+- **`.cline/rules/esp32-audio-node.md`**, **`.cline/rules/workflow.md`**, **`PROJECT_STATE.md`**: updated for the RTP/UDP phase (build commands via `env.ps1`, milestone order, transport, next steps).
+
+### Fixed
+- **Every RTP frame silently dropped** (`recvfrom` blocked forever while ping still worked): 1932 B frames exceed the 1500 B MTU and arrive IP-fragmented, but `CONFIG_LWIP_IP4_REASSEMBLY` was off. Enabling it and raising `IP_REASS_MAX_PBUFS` 10 → 20 produced `dropped=0`.
+- **Setup-AP boot loop**: `esp_netif_set_ip_info()` on the AP netif while its DHCPS was running → `ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED` panic, reboot, repeat. Fix: stop DHCPS → set IP → restart DHCPS.
+- **Boot loop from init order**: `esp_wifi_init()` ran before `nvs_flash_init()` → `ESP_ERR_NVS_NOT_INITIALIZED`. NVS init must come first.
+- **Premature failover**: ms/µs unit mismatch opened AP mode ~30 ms after STA start instead of after 30 s.
 
 ### Planned (next implementation phase)
-- P1: RTP UDP receiver + validation in `main.c` (preserve I2S/ring/pump/gain/LED).
-- P2+P3: Setup AP + captive portal + NVS config + STA mode + WiFi failover.
-- P4: Factory reset (GPIO0).
-- P8: Rewrite `send_pcm.py` → RTP UDP sender (file/loop/tone submodes).
+- Multi-node unicast: send the same RTP stream to 2+ board IPs (P9).
+- Failover → AP path exercise on hardware (bad SSID in NVS → 30 s → AP, NVS kept).
 
 ---
 

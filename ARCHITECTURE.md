@@ -117,7 +117,7 @@ The receiver explicitly converts the validated RTP PCM payload into the I2S buff
 - SoftAP: SSID `AudioNode-Setup`, open (no AP password).
 - The board runs an HTTP server on the AP subnet (e.g. 192.168.4.1) serving the setup page.
 - The page is reachable by navigating to the board's AP IP in a browser; on most phones connecting to the open AP triggers an automatic portal prompt.
-- In this mode: no RTP listener is active. The board waits for the user to submit the config form.
+- In this mode the UDP listener is already bound (`0.0.0.0:1234`) but nothing streams; the board waits for the user to submit the config form.
 
 ### STA mode (normal operation)
 
