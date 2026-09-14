@@ -14,6 +14,7 @@
 - **P3 STA-from-NVS verified**: boots → cfg blob from NVS → joins <ssid> → GOT IP <board-ip>, no premature failover
 - **P2 setup AP + captive portal VERIFIED on hardware (2026-09-13)**: empty-NVS boot → open AP `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS blob → reboot → STA from NVS (see §4 for the DHCPS boot-loop fix)
 - **P4 factory reset VERIFIED on hardware (2026-09-14)**: BOOT held 5 s → NVS erased → reboot → `AudioNode-Setup` AP (exactly 1 cycle, no panic — the post-DHCPS-fix AP path was proven in the same run)
+- **P4 → re-provision → STA → streaming round trip VERIFIED on hardware (2026-09-14)**: portal Save → NVS → reboot → STA (GOT IP <board-ip>) → 12 s RTP tone: 600 frames sent, board `pkts=503 dropped=0 pcm=965760 bytes` (503 × 1920 B byte-exact) with the source-IP whitelist enforced
 - Known pitfall: stale zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` + kill monitor wrappers, verify 0 pythons, before any run
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
@@ -50,6 +51,7 @@
 - P2 setup AP + captive portal: empty NVS → `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS → reboot → STA
 - P3 STA-from-NVS: boot → saved cfg → joins <ssid> → GOT IP <board-ip>
 - P4 factory reset: BOOT held 5 s → NVS erased → `rst:0xc (RTC_SW_CPU_RST)` → `cfg: none in NVS` → softAP `AudioNode-Setup` + DHCPS 192.168.4.1 + portal, exactly 1 cycle, no panic. Side effect on the post-reset boot: `W (1036) phy_init: failed to load RF calibration data (0x1102), falling back to full calibration` — expected (calibration was wiped), self-healing
+- P4 re-provision round trip: `cfg: saved via portal (SSID=<ssid> server=<pc-ip>:1234)` → reboot → `cfg: server whitelist <pc-ip>` → `STA: joining <ssid>` → `GOT IP: <board-ip>`. Followed by an RTP regression run: sender 600 frames / 12.0 s, board `pkts=503 dropped=0 pcm=965760 bytes` — P1 still good with the whitelist active
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
 - ❌ **(2026-09-13) UDP datagrams 1932 B with `CONFIG_LWIP_IP4_REASSEMBLY` disabled** — every RTP frame (1932 B > 1500 MTU) arrives IP-fragmented and lwIP silently drops it: recvfrom blocks forever, ping still works, reverse path (board→PC 2 B probe) works. Root cause of "RTP receiver never fires". FIX: `CONFIG_LWIP_IP4_REASSEMBLY=y` in sdkconfig.defaults. With default `IP_REASS_MAX_PBUFS=10` there was still ~5% seq-drop; 20 → dropped=0.
@@ -57,6 +59,7 @@
 - ❌ **(2026-09-13) failover task ms/µs unit mismatch** — compared µs against `STA_FAIL_TIMEOUT_MS/1000` (=30) → AP mode fired ~30 ms after STA start, even though STA connected at 1.3 s. FIX: keep everything in µs (`(int64_t)STA_FAIL_TIMEOUT_MS * 1000`).
 - ❌ **(2026-09-13) `esp_netif_set_ip_info()` on the AP netif while its DHCPS is running** — panic `ESP_ERROR_CHECK failed: esp_err_t 0x5007 (ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED)` at `setup_ap_start` (main.c:322) → `abort()` → reboot → **setup-AP boot loop** (439 KB of repeated identical panics). The default AP netif already runs DHCPS bound to 192.168.4.1 and refuses an IP change while up. FIX: `esp_netif_dhcps_stop(ap_if)` → `esp_netif_set_ip_info()` → `esp_netif_dhcps_start(ap_if)`.
 - ❌ **(2026-09-13) factory WiFi seed on empty NVS** — `cfg_factory_seed()` wrote lab WiFi (<ssid>/<password>) on first boot, so a fresh board auto-joined the lab instead of running `AudioNode-Setup`. Contradicted the documented spec ("first boot / factory reset → setup AP"). REMOVED: empty NVS now leaves a zeroed cfg → empty SSID → setup AP.
+- ℹ️ **(2026-09-14) source-IP whitelist vs sender host** — the whitelist is honest, not sticky: the board accepted packets only from the IP the portal stored (`<pc-ip>`). This PC reaches the LAN over **Ethernet = <pc-ip>** (its Wi-Fi adapter is separate), so running `send_pcm.py` from this PC matches the stored whitelist. If the sender moves to another host, update the portal's Server IP (or set it to `0.0.0.0` to accept any).
 | Date | What we tried | Exact error/symptom | Why failed (root cause) | Outcome |
 |---|---|---|---|---|
 | — | — | — | — | — |
@@ -130,7 +133,7 @@
 2. ✅ P3 STA-from-NVS — VERIFIED on HW (GOT IP, RSSI -43, listening :1234)
 3. ✅ P2 on-HW verify — VERIFIED 2026-09-13 (empty NVS → `AudioNode-Setup` AP → portal → Save → NVS → reboot → STA, GOT IP)
 4. ✅ P4 factory reset — VERIFIED 2026-09-14 (BOOT 5 s → NVS erase → setup AP, one clean cycle)
-5. 🔲 Re-provision the node (NVS is empty after the P4 test → board is sitting in setup AP): portal from a **phone** so the PC keeps internet, then confirm STA + RTP streaming
+5. ✅ Re-provision round trip — VERIFIED 2026-09-14 (portal → NVS → STA at <board-ip> → 12 s RTP tone, dropped=0, whitelist enforced). Node is back online
 6. 🔲 P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept)
 7. 🔲 P5: Verify multi-node (send to 2+ board IPs)
 7. 🔲 Commit each verified milestone only
