@@ -2,7 +2,7 @@
  * audio_node — WiFi audio streamer (M4)
  * Board: ESP32-S3-DevKitC-1-N8R2, Amp: MAX98357A
  * 48000 Hz, 16-bit, MONO, I2S Philips std, no MCLK.
- * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled), RGB LED=48
+ * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled), RGB LED=48, BOOT=0 (factory reset)
  */
 #include <stdio.h>
 #include <string.h>
@@ -85,6 +85,7 @@ static int ring_read(uint8_t *dst, int len)
 #define PIN_DIN    6
 #define PIN_SD     15
 #define PIN_RGB    48   /* onboard WS2812 RGB LED */
+#define PIN_BOOT    0   /* onboard BOOT button, active low (P4: factory reset) */
 
 /* LED state: RGB shows connection state when idle, audio VU when streaming */
 static led_strip_handle_t rgb_led = NULL;
@@ -114,6 +115,7 @@ static inline int16_t gain_clip(int32_t s)
 #define AP_SSID         "AudioNode-Setup"
 #define AP_GATEWAY      "192.168.4.1"
 #define STA_FAIL_TIMEOUT_MS 30000       /* no IP in 30 s => revert to setup AP */
+#define FACTORY_HOLD_MS 5000            /* P4: BOOT hold that erases NVS */
 
 /* Persisted config blob (SSID, password, server ip/port) */
 typedef struct {
@@ -356,6 +358,44 @@ static void failover_task(void *arg)
             esp_wifi_stop();
             setup_ap_start();
             sta_start = 0;
+        }
+    }
+}
+
+/* ── P4: factory reset — hold BOOT (GPIO0) 5 s → erase NVS → setup AP ── */
+static void factory_reset_task(void *arg)
+{
+    /* BOOT is active-low with an external pull-up on the DevKitC-1. */
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << PIN_BOOT,
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+
+    int held_ms = 0;
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(50));
+        if (gpio_get_level(PIN_BOOT) != 0) {          /* not pressed */
+            if (held_ms >= 1000) printf("factory reset: BOOT released, cancelled\n");
+            held_ms = 0;
+            continue;
+        }
+        if (held_ms == 0) printf("factory reset: BOOT held, keep %d s to erase NVS\n",
+                                 FACTORY_HOLD_MS / 1000);
+        held_ms += 50;
+        if (held_ms >= FACTORY_HOLD_MS) {
+            esp_err_t e = nvs_flash_erase();
+            if (e != ESP_OK) {                        /* keep config rather than lose it */
+                printf("factory reset: NVS erase failed (0x%x), aborting\n", e);
+                held_ms = 0;
+                continue;
+            }
+            printf("factory reset: NVS erased, rebooting into setup AP\n");
+            vTaskDelay(pdMS_TO_TICKS(200));
+            esp_restart();
         }
     }
 }
@@ -691,5 +731,6 @@ void app_main(void)
 
     xTaskCreate(rssi_task, "rssi", 3072, NULL, 3, NULL);
     xTaskCreate(failover_task, "failover", 3072, NULL, 2, NULL);
+    xTaskCreate(factory_reset_task, "factory", 3072, NULL, 2, NULL);
     xTaskCreate(udp_task, "udp", 8192, NULL, 4, NULL);
 }

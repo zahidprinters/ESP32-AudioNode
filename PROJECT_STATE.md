@@ -13,6 +13,7 @@
 - **P1 RTP receiver now VERIFIED on hardware (2026-09-13)**: 30 s stream, 1272+ pkts, **dropped=0** — root cause of earlier silence was disabled IP reassembly (see §4)
 - **P3 STA-from-NVS verified**: boots → cfg blob from NVS → joins <ssid> → GOT IP <board-ip>, no premature failover
 - **P2 setup AP + captive portal VERIFIED on hardware (2026-09-13)**: empty-NVS boot → open AP `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS blob → reboot → STA from NVS (see §4 for the DHCPS boot-loop fix)
+- **P4 factory reset VERIFIED on hardware (2026-09-14)**: BOOT held 5 s → NVS erased → reboot → `AudioNode-Setup` AP (exactly 1 cycle, no panic — the post-DHCPS-fix AP path was proven in the same run)
 - Known pitfall: stale zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` + kill monitor wrappers, verify 0 pythons, before any run
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
@@ -24,7 +25,7 @@
 | **P1: RTP L16 over UDP receiver + validation** | ✅ VERIFIED 2026-09-13 | `main/main.c` | UDP recv 1234, RTP header validation (v=2, PT=96), source-IP whitelist, seq-gap silence-fill, 5 s stats. Required `CONFIG_LWIP_IP4_REASSEMBLY=y` (1932 B frames > MTU 1500 arrive fragmented). 30 s stream 1272+ pkts dropped=0 |
 | **P2: Setup AP + captive portal** | ✅ VERIFIED 2026-09-13 | `main/main.c` | SoftAP `AudioNode-Setup` open AP @192.168.4.1, httpd `/` form + `/save` POST → NVS blob → reboot to STA. Empty NVS (first boot / factory reset) → setup AP. AP IP requires DHCPS stopped first, and the old factory WiFi seed is removed — see §4 |
 | **P3: STA mode + WiFi failover** | ✅ VERIFIED 2026-09-13 | `main/main.c` | NVS cfg blob (SSID/pass/server ip:port) w/ first-boot factory seed; STA join verified (GOT IP, no failover). Failover task: no IP in 30 s → setup AP (NVS kept); wifi drop → auto-reconnect (NVS kept). Failover→AP path not yet exercised on HW |
-| **P4: Factory reset (GPIO0)** | 🔲 TODO (next) | `main/main.c` | BOOT button (GPIO0) held ~5 s → erase NVS → reboot to setup AP. Short presses ignored. WiFi loss does NOT erase NVS |
+| **P4: Factory reset (GPIO0)** | ✅ VERIFIED 2026-09-14 | `main/main.c` | BOOT button (GPIO0) held 5 s → `nvs_flash_erase()` → `esp_restart()` → setup AP. Short presses ignored. Erase failure aborts instead of rebooting (config kept, not lost). WiFi loss does NOT erase NVS |
 | **P5: RGB LED states (setup/AP/STAnstreaming/VU)** | ✅ DONE | `main/main.c` | Preserved from TCP build; red / blue breathing / VU, unchanged |
 | **P6: PSRAM ring buffer (jitter cushion)** | ✅ DONE | `main/main.c` | Preserved; UDP-RX writes validated PCM, pump pulls — unchanged |
 | **P7: DMA-backpressure pump** | ✅ DONE | `main/main.c` | Preserved; no fixed sleep — unchanged |
@@ -48,6 +49,7 @@
 - P1 RTP L16/UDP receive: 30 s stream, 1272+ pkts, dropped=0 (needs `CONFIG_LWIP_IP4_REASSEMBLY=y`)
 - P2 setup AP + captive portal: empty NVS → `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS → reboot → STA
 - P3 STA-from-NVS: boot → saved cfg → joins <ssid> → GOT IP <board-ip>
+- P4 factory reset: BOOT held 5 s → NVS erased → `rst:0xc (RTC_SW_CPU_RST)` → `cfg: none in NVS` → softAP `AudioNode-Setup` + DHCPS 192.168.4.1 + portal, exactly 1 cycle, no panic. Side effect on the post-reset boot: `W (1036) phy_init: failed to load RF calibration data (0x1102), falling back to full calibration` — expected (calibration was wiped), self-healing
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
 - ❌ **(2026-09-13) UDP datagrams 1932 B with `CONFIG_LWIP_IP4_REASSEMBLY` disabled** — every RTP frame (1932 B > 1500 MTU) arrives IP-fragmented and lwIP silently drops it: recvfrom blocks forever, ping still works, reverse path (board→PC 2 B probe) works. Root cause of "RTP receiver never fires". FIX: `CONFIG_LWIP_IP4_REASSEMBLY=y` in sdkconfig.defaults. With default `IP_REASS_MAX_PBUFS=10` there was still ~5% seq-drop; 20 → dropped=0.
@@ -108,7 +110,7 @@
 | P1 RTP recv | UDP packets received, validated (v=2, PT=96), 20 ms frames into ring, silence-fill on loss, no I2S blocking |
 | P2 Setup AP | Board AP visible (SSID `AudioNode-Setup`), captive portal page loads, config saved to NVS |
 | P3 STA mode | Board joins WiFi, gets IP, LED turns blue (waiting), starts listening |
-| P4 Factory reset | GPIO0 held 5 s → NVS erased → board reboots to setup AP |
+| P4 Factory reset | ✅ GPIO0 held 5 s → NVS erased → board reboots to setup AP (verified 2026-09-14) |
 | P5 Multi-node | Same RTP stream to N board IPs, each plays independently |
 
 ## 9. SESSION PROTOCOL (before every flash/test)
@@ -127,9 +129,10 @@
 1. ✅ P1 RTP UDP receiver — VERIFIED on HW (30 s stream, 1272+ pkts, dropped=0) after IP-reassembly fix
 2. ✅ P3 STA-from-NVS — VERIFIED on HW (GOT IP, RSSI -43, listening :1234)
 3. ✅ P2 on-HW verify — VERIFIED 2026-09-13 (empty NVS → `AudioNode-Setup` AP → portal → Save → NVS → reboot → STA, GOT IP)
-4. 🔲 P4: Factory reset (GPIO0 ~5 s hold → NVS erase → setup AP) in `main/main.c` — **IN PROGRESS**
-5.  P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept)
-6. 🔲 P5: Verify multi-node (send to 2+ board IPs)
+4. ✅ P4 factory reset — VERIFIED 2026-09-14 (BOOT 5 s → NVS erase → setup AP, one clean cycle)
+5. 🔲 Re-provision the node (NVS is empty after the P4 test → board is sitting in setup AP): portal from a **phone** so the PC keeps internet, then confirm STA + RTP streaming
+6. 🔲 P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept)
+7. 🔲 P5: Verify multi-node (send to 2+ board IPs)
 7. 🔲 Commit each verified milestone only
 
 ## 12. DEV TOOLING (2026-09-11, non-firmware)
@@ -142,3 +145,4 @@
 - Monitor logs over USB CDC (`idf.py -p COM5 monitor --no-reset`)
 - PC microphone (use to verify tone quality/noise — proven method, tone/noise ratio ~99x on previous test)
 - Board quirks: USB CDC can die after flash → unplug/replug; "waiting for download" → unplug/replug USB
+- **Cline tooling quirks (2026-09-14)**: `run_commands` shell-integration capture can fail ("Command completion could not be observed") although the command actually ran — workaround: redirect to a file (`cmd > tmp\x.txt 2>&1`) and read that file. Bounded background monitoring: `Start-Job { ... idf.py -p COM5 monitor *> logs\<file>.md }` then `Stop-Job`/`Remove-Job`, and always `taskkill /F /IM python.exe /T` afterwards (zombie monitors hold COM5).
