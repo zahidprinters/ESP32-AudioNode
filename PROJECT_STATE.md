@@ -15,6 +15,8 @@
 - **P2 setup AP + captive portal VERIFIED on hardware (2026-09-13)**: empty-NVS boot → open AP `AudioNode-Setup` @192.168.4.1 → portal form → Save → NVS blob → reboot → STA from NVS (see §4 for the DHCPS boot-loop fix)
 - **P4 factory reset VERIFIED on hardware (2026-09-14)**: BOOT held 5 s → NVS erased → reboot → `AudioNode-Setup` AP (exactly 1 cycle, no panic — the post-DHCPS-fix AP path was proven in the same run)
 - **P4 → re-provision → STA → streaming round trip VERIFIED on hardware (2026-09-14)**: portal Save → NVS → reboot → STA (GOT IP <board-ip>) → 12 s RTP tone: 600 frames sent, board `pkts=503 dropped=0 pcm=965760 bytes` (503 × 1920 B byte-exact) with the source-IP whitelist enforced
+- **Failover→AP path VERIFIED (2026-09-14)**: bad/typo'd SSID → association fails → no IP in 30 s → `failover: no IP in 30000 ms, opening setup AP (NVS kept)` → AP reopens by itself → portal recovery → STA + GOT IP
+- **P5 LED regression FIXED + VERIFIED (2026-09-14)**: the LED used to freeze solid red after any stream (sticky `net_state`, frozen VU level). Streaming is now detected by packet recency → blue breathing ↔ VU ↔ blue
 - Known pitfall: stale zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` + kill monitor wrappers, verify 0 pythons, before any run
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
@@ -25,9 +27,9 @@
 | M4: TCP 2-min acceptance (data path verified) | ✅ DONE (archived) | `main/main.c` | 2-min run 0 drops 0 errors, prompt stop — data path proven, protocol now superseded by RTP/UDP |
 | **P1: RTP L16 over UDP receiver + validation** | ✅ VERIFIED 2026-09-13 | `main/main.c` | UDP recv 1234, RTP header validation (v=2, PT=96), source-IP whitelist, seq-gap silence-fill, 5 s stats. Required `CONFIG_LWIP_IP4_REASSEMBLY=y` (1932 B frames > MTU 1500 arrive fragmented). 30 s stream 1272+ pkts dropped=0 |
 | **P2: Setup AP + captive portal** | ✅ VERIFIED 2026-09-13 | `main/main.c` | SoftAP `AudioNode-Setup` open AP @192.168.4.1, httpd `/` form + `/save` POST → NVS blob → reboot to STA. Empty NVS (first boot / factory reset) → setup AP. AP IP requires DHCPS stopped first, and the old factory WiFi seed is removed — see §4 |
-| **P3: STA mode + WiFi failover** | ✅ VERIFIED 2026-09-13 | `main/main.c` | NVS cfg blob (SSID/pass/server ip:port) w/ first-boot factory seed; STA join verified (GOT IP, no failover). Failover task: no IP in 30 s → setup AP (NVS kept); wifi drop → auto-reconnect (NVS kept). Failover→AP path not yet exercised on HW |
+| **P3: STA mode + WiFi failover** | ✅ VERIFIED 2026-09-13 | `main/main.c` | NVS cfg blob (SSID/pass/server ip:port) w/ first-boot factory seed; STA join verified (GOT IP, no failover). Failover task: no IP in 30 s → setup AP (NVS kept); wifi drop → auto-reconnect (NVS kept). Failover→AP VERIFIED 2026-09-14 (typo'd SSID → association failed → no IP in 30 s → AP reopened by itself, NVS kept → portal recovery → STA + GOT IP) |
 | **P4: Factory reset (GPIO0)** | ✅ VERIFIED 2026-09-14 | `main/main.c` | BOOT button (GPIO0) held 5 s → `nvs_flash_erase()` → `esp_restart()` → setup AP. Short presses ignored. Erase failure aborts instead of rebooting (config kept, not lost). WiFi loss does NOT erase NVS |
-| **P5: RGB LED states (setup/AP/STAnstreaming/VU)** | ✅ DONE | `main/main.c` | Preserved from TCP build; red / blue breathing / VU, unchanged |
+| **P5: RGB LED states (setup/AP/waiting/streaming/VU)** | ✅ FIXED 2026-09-14 | `main/main.c` | red = wifi down / setup AP · blue breathing = got IP, no live stream · VU = streaming. Was stuck solid red after any stream (regression from the UDP rewrite — see §4); streaming is now derived from packet recency (200 ms) |
 | **P6: PSRAM ring buffer (jitter cushion)** | ✅ DONE | `main/main.c` | Preserved; UDP-RX writes validated PCM, pump pulls — unchanged |
 | **P7: DMA-backpressure pump** | ✅ DONE | `main/main.c` | Preserved; no fixed sleep — unchanged |
 | **P8: RTP sender (Python, file/loop/tone)** | ✅ DONE+USED 2026-09-13 | `server/send_pcm.py` | RTP UDP sender with tone/file/loop submodes; 30 s tone @50 fps delivered 1500 frames to board (P1 receive verified against it) |
@@ -52,6 +54,7 @@
 - P3 STA-from-NVS: boot → saved cfg → joins <ssid> → GOT IP <board-ip>
 - P4 factory reset: BOOT held 5 s → NVS erased → `rst:0xc (RTC_SW_CPU_RST)` → `cfg: none in NVS` → softAP `AudioNode-Setup` + DHCPS 192.168.4.1 + portal, exactly 1 cycle, no panic. Side effect on the post-reset boot: `W (1036) phy_init: failed to load RF calibration data (0x1102), falling back to full calibration` — expected (calibration was wiped), self-healing
 - P4 re-provision round trip: `cfg: saved via portal (SSID=<ssid> server=<pc-ip>:1234)` → reboot → `cfg: server whitelist <pc-ip>` → `STA: joining <ssid>` → `GOT IP: <board-ip>`. Followed by an RTP regression run: sender 600 frames / 12.0 s, board `pkts=503 dropped=0 pcm=965760 bytes` — P1 still good with the whitelist active
+- P5 LED state machine fixed 2026-09-14: blue breathing (waiting) → VU while a stream plays → back to blue within ~200 ms after it stops (user-verified by eye). 60 s run: 3000 frames sent, `pkts=2753 dropped=1 pcm=5285760` byte-exact — the audio path was untouched and stayed healthy
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
 - ❌ **(2026-09-13) UDP datagrams 1932 B with `CONFIG_LWIP_IP4_REASSEMBLY` disabled** — every RTP frame (1932 B > 1500 MTU) arrives IP-fragmented and lwIP silently drops it: recvfrom blocks forever, ping still works, reverse path (board→PC 2 B probe) works. Root cause of "RTP receiver never fires". FIX: `CONFIG_LWIP_IP4_REASSEMBLY=y` in sdkconfig.defaults. With default `IP_REASS_MAX_PBUFS=10` there was still ~5% seq-drop; 20 → dropped=0.
@@ -60,6 +63,7 @@
 - ❌ **(2026-09-13) `esp_netif_set_ip_info()` on the AP netif while its DHCPS is running** — panic `ESP_ERROR_CHECK failed: esp_err_t 0x5007 (ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED)` at `setup_ap_start` (main.c:322) → `abort()` → reboot → **setup-AP boot loop** (439 KB of repeated identical panics). The default AP netif already runs DHCPS bound to 192.168.4.1 and refuses an IP change while up. FIX: `esp_netif_dhcps_stop(ap_if)` → `esp_netif_set_ip_info()` → `esp_netif_dhcps_start(ap_if)`.
 - ❌ **(2026-09-13) factory WiFi seed on empty NVS** — `cfg_factory_seed()` wrote lab WiFi (<ssid>/<password>) on first boot, so a fresh board auto-joined the lab instead of running `AudioNode-Setup`. Contradicted the documented spec ("first boot / factory reset → setup AP"). REMOVED: empty NVS now leaves a zeroed cfg → empty SSID → setup AP.
 - ℹ️ **(2026-09-14) source-IP whitelist vs sender host** — the whitelist is honest, not sticky: the board accepted packets only from the IP the portal stored (`<pc-ip>`). This PC reaches the LAN over **Ethernet = <pc-ip>** (its Wi-Fi adapter is separate), so running `send_pcm.py` from this PC matches the stored whitelist. If the sender moves to another host, update the portal's Server IP (or set it to `0.0.0.0` to accept any).
+- ❌ **(2026-09-14) RGB LED stuck solid red after any stream** — `udp_task` sets `net_state = 2` ("streaming") on every packet but **nothing clears it when the stream ends** (the old TCP task had that stream-end path; the UDP rewrite lost it). The pump's starved branch (`avail < 512 B` — the steady state once a stream stops) writes silence and then `continue`s, **skipping the VU-update block**, so `vu_level` froze at its last loud peak → the VU colour (loud = red) was displayed forever while WiFi was perfectly healthy (ping OK, `rssi` still printing, no disconnect entries). Root cause = sticky streaming flag. FIX: derive "streaming" from **packet recency** — `last_pkt_ms` stamped per accepted packet; the LED treats a >200 ms gap as no live stream and falls back to blue breathing (net_state >= 1).
 | Date | What we tried | Exact error/symptom | Why failed (root cause) | Outcome |
 |---|---|---|---|---|
 | — | — | — | — | — |
@@ -134,8 +138,10 @@
 3. ✅ P2 on-HW verify — VERIFIED 2026-09-13 (empty NVS → `AudioNode-Setup` AP → portal → Save → NVS → reboot → STA, GOT IP)
 4. ✅ P4 factory reset — VERIFIED 2026-09-14 (BOOT 5 s → NVS erase → setup AP, one clean cycle)
 5. ✅ Re-provision round trip — VERIFIED 2026-09-14 (portal → NVS → STA at <board-ip> → 12 s RTP tone, dropped=0, whitelist enforced). Node is back online
-6. 🔲 P2/P3 leftover: failover→AP path exercise (bad SSID in NVS → 30 s → AP, NVS kept)
-7. 🔲 P5: Verify multi-node (send to 2+ board IPs)
+6. ✅ Failover→AP path — VERIFIED 2026-09-14 (bad SSID → 30 s → AP reopened by itself, NVS kept, portal recovery)
+7. ✅ P5 LED state fix — VERIFIED 2026-09-14 (blue breathing ↔ VU ↔ blue, no more stuck red)
+8.  P9: multi-node unicast (send the same RTP stream to 2+ board IPs)
+9. 🔲 Commit each verified milestone only
 7. 🔲 Commit each verified milestone only
 
 ## 12. DEV TOOLING (2026-09-11, non-firmware)

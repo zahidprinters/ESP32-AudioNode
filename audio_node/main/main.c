@@ -91,6 +91,7 @@ static int ring_read(uint8_t *dst, int len)
 static led_strip_handle_t rgb_led = NULL;
 static volatile uint8_t vu_level = 0;    /* smoothed audio level 0..255 */
 static volatile int net_state = 0;       /* 0=wifi down, 1=waiting, 2=streaming */
+static volatile uint32_t last_pkt_ms = 0;/* last accepted RTP packet (ms), for live-stream detect */
 
 #define SAMPLE_RATE 48000
 #define TONE_HZ     1000
@@ -537,14 +538,19 @@ static void led_task(void *arg)
     int phase = 0;
     while (1) {
         if (rgb_led == NULL) { vTaskDelay(pdMS_TO_TICKS(100)); continue; }
-        if (net_state == 2) {
+        /* "streaming" is packet recency, not net_state: nothing clears net_state
+           after a UDP stream ends, so the LED used to freeze on its last VU
+           colour (loud = red) forever. A 200 ms packet gap => no live stream. */
+        uint32_t lp = last_pkt_ms;
+        int streaming = lp && ((uint32_t)(esp_timer_get_time() / 1000) - lp < 200);
+        if (streaming) {
             /* VU: quadratic red + inverse green = green quiet → red loud */
             int v = vu_level;
             uint8_t r = (uint8_t)((v * v) >> 8);
             uint8_t g = (uint8_t)(255 - ((v * v) >> 8));
             led_strip_set_pixel(rgb_led, 0, r, g, 0);
-        } else if (net_state == 1) {
-            /* blue breathing: 0..255..0 over ~3s */
+        } else if (net_state >= 1) {
+            /* waiting (got IP, no live stream): blue breathing 0..255..0 over ~3s */
             int ph = phase = (phase + 1) % 100;
             int b = ph < 50 ? ph * 5 : (100 - ph) * 5;
             led_strip_set_pixel(rgb_led, 0, 0, 0, (uint8_t)b);
@@ -652,6 +658,7 @@ static void udp_task(void *arg)
 
         play_mode = 1;
         net_state = 2;   /* streaming */
+        last_pkt_ms = (uint32_t)(esp_timer_get_time() / 1000);   /* LED: stream is live */
 
         int64_t now = esp_timer_get_time();
         if (now - last_log > 5000000) {

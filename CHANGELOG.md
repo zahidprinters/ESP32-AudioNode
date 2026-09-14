@@ -30,6 +30,7 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 - **Setup-AP boot loop**: `esp_netif_set_ip_info()` on the AP netif while its DHCPS was running → `ESP_ERR_ESP_NETIF_DHCP_NOT_STOPPED` panic, reboot, repeat. Fix: stop DHCPS → set IP → restart DHCPS.
 - **Boot loop from init order**: `esp_wifi_init()` ran before `nvs_flash_init()` → `ESP_ERR_NVS_NOT_INITIALIZED`. NVS init must come first.
 - **Premature failover**: ms/µs unit mismatch opened AP mode ~30 ms after STA start instead of after 30 s.
+- **RGB LED stuck solid red after any stream**: the streaming flag (`net_state = 2`) was never cleared when a UDP stream ended (the TCP task's stream-end path was lost in the transport rewrite), and the pump's starved branch skipped the VU update, so `vu_level` froze at its last loud peak (loud = red). Fixed by deriving "streaming" from packet recency (`last_pkt_ms`, 200 ms window) — the LED now falls back to blue breathing when no packets are live.
 
 ### Planned (next implementation phase)
 - Multi-node unicast: send the same RTP stream to 2+ board IPs (P9).

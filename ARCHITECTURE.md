@@ -142,6 +142,8 @@ The receiver explicitly converts the validated RTP PCM payload into the I2S buff
 | WiFi connected, waiting for RTP server | Blue breathing (fade in/out ~3 s) |
 | Streaming audio | VU meter — green (quiet) → yellow → red (loud), pulsing with level |
 
+"Streaming" is decided by **packet recency**, not a sticky flag: the LED stays on the VU only while RTP packets keep arriving. A gap longer than ~200 ms means the stream ended, and the LED returns to blue breathing (waiting).
+
 ## Multi-node
 
 Unicast first (production initial):
