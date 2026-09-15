@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AudioPlayer — ESP32 AudioNode</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>AudioPlayer</h1>
+    <p class="sub">RTP L16/UDP server for ESP32 AudioNode boards</p>
+  </header>
+
+  <section class="panel">
+    <h2>Library</h2>
+    <div class="row">
+      <label for="libRoot">Library folder:</label>
+      <input id="libRoot" type="text" placeholder="Pick a folder with MP3s...">
+      <button id="pickBtn" type="button">Choose folder</button>
+      <button id="rescanBtn" type="button">Rescan</button>
+    </div>
+    <p id="libInfo" class="muted">Loading library...</p>
+    <ul id="fileList" class="filelist"></ul>
+  </section>
+
+  <p id="errorBox" class="error" hidden></p>
+
+  <section class="panel">
+    <h2>Player</h2>
+    <div class="now-playing">
+      <span id="nowSrc" class="nowSrc">No file selected</span>
+    </div>
+    <div class="transport">
+      <button id="playBtn" type="button" class="play">Play</button>
+      <button id="stopBtn" type="button">Stop</button>
+    </div>
+    <div class="seek-row">
+      <input id="seekBar" type="range" min="0" max="1000" value="0" step="1"
+             aria-label="Seek position">
+      <span id="posLabel" class="muted">0:00 / 0:00</span>
+    </div>
+    <div class="vol-row">
+      <label for="volSlider">Volume</label>
+      <input id="volSlider" type="range" min="0" max="10" value="1" step="0.05"
+             aria-label="Volume">
+      <span id="volLabel" class="muted">1.00</span>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Nodes</h2>
+    <p id="nodeInfo" class="muted">Connecting...</p>
+    <ul id="nodeList" class="nodelist"></ul>
+  </section>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

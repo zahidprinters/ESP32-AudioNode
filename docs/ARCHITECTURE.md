@@ -7,10 +7,11 @@ A configurable, networkable speaker: an ESP32-S3 board with a MAX98357A class-D 
 ## Data flow (end to end)
 
 ```
-Server (Python send_pcm.py / VLC / custom)
+Server (audio_player: browser app, or CLI send_pcm.py; VLC/custom possible)
   │  reads audio: file (ffmpeg) / PC loopback (WASAPI) / tone
   │  encodes to RTP L16: 48 kHz, 16-bit, mono, 20 ms frames
   │  RTP header: version=2, PT=96, seq+1/frame, ts+960/frame, SSRC=rand
+  │  paces to real time (see "Pacing" below) — one datagram per frame per node
   └─► UDP datagram ──► board IP :1234
 
   ESP32-S3 (firmware)
@@ -23,7 +24,37 @@ Server (Python send_pcm.py / VLC / custom)
   └─► I2S BCLK/LRC/DIN ──► MAX98357A ──► speaker
 ```
 
+Code lives in two trees: `firmware/` (the board, all of the ESP32 side) and
+`audio_player/` (the server, all of the PC side). `audio_player/player.py` is the
+single ffmpeg→RTP implementation — the browser app and the CLI sender both use it.
+
 The audio pipeline (I2S, PSRAM ring buffer, DMA-backpressure pump, ×2 gain, LED) is carried from the proven TCP prototype (M0–M3). Only the transport layer changes from TCP to RTP/UDP.
+
+## Pacing (why the sender must be rate-limited)
+
+The board's jitter ring overflows and drops packets if the server sends faster
+than real time, and it underruns (audible gaps) if the server sends slower.
+Correct pacing is one frame every 20 ms = **50 datagrams/s per node**, measured
+from the first frame actually sent:
+
+```python
+sent_frames = bytes_sent / 1920
+ahead = (sent_frames / 50) - (now - first_frame_time)
+if ahead > 0:
+    time.sleep(min(ahead, 0.25))   # sleep off the whole lead, capped per iteration
+```
+
+Two traps worth remembering (both hit in production here):
+
+- The clock must be anchored on the **first sent frame**, not on `play()` —
+  ffmpeg spawn + decode takes ~250 ms and would otherwise look like a deficit.
+- An upper bound on `ahead` (e.g. `0 < ahead < 0.1`) *looks* like a safety net but
+  silently disables pacing as soon as the sender runs >100 ms ahead, which is
+  immediately (ffmpeg hands the pump 4 frames per read). The sender then free-runs
+  at the decode rate (~3×) and the board logs `dropped=N`.
+
+Verification is cheap and automatic: `python -m audio_player.selftest` measures the
+real send rate over a loopback UDP socket (expects ~50 frames/s).
 
 ## Protocol: RTP L16 over UDP
 

@@ -50,18 +50,22 @@ A configurable, networkable speaker — drop it on any WiFi, point it at a serve
 
 ```
 d:\esp-idf\
-├── audio_node/          # ESP32 firmware (main, CMake, sdkconfig)
-├── server/
-│   └── send_pcm.py      # cross-platform RTP sender (file / loop / tone)
+├── firmware/            # ESP32 firmware (main, CMake, sdkconfig)
+├── audio_player/        # PC server app: browser UI + RTP sender
+│   ├── app.py           #   Flask + Socket.IO backend (python -m audio_player.app)
+│   ├── player.py        #   ffmpeg -> RTP L16/UDP pipeline
+│   ├── library.py       #   media folder scan + ffprobe durations
+│   ├── config.py        #   paths, nodes, RTP constants
+│   ├── selftest.py      #   python -m audio_player.selftest (29 checks)
+│   ├── send_pcm.py      #   CLI sender (file / loop / tone), no browser needed
+│   ├── templates/       #   UI HTML
+│   ├── static/          #   UI js/css
+│   └── media/           #   default library root
+├── docs/                # README, ARCHITECTURE, SERVER_SETUP, GUIDELINES,
+│                        # CHANGELOG, PROJECT_STATE
 ├── logs/                # session logs
 ├── tmp/                 # scratch (git-ignored)
-├── env.ps1              # ESP-IDF v6.1 environment (PowerShell)
-├── README.md            # this file
-├── ARCHITECTURE.md      # full architecture + protocol spec
-├── SERVER_SETUP.md      # server-side setup, all platforms
-├── GUIDELINES.md        # development guidelines + decisions + acceptance
-├── CHANGELOG.md         # chronological change log
-└── PROJECT_STATE.md     # live status, feature map, next steps
+└── env.ps1              # ESP-IDF v6.1 environment (PowerShell)
 ```
 
 ## Protocol at a glance
@@ -82,17 +86,21 @@ See ARCHITECTURE.md for the full spec, SERVER_SETUP.md for running the sender.
 
 ```powershell
 . D:\esp-idf\env.ps1
-cd d:\esp-idf\audio_node
+cd d:\esp-idf\firmware
 idf.py set-target esp32s3
 idf.py build
 idf.py -p COM5 flash
 idf.py -p COM5 monitor --no-reset   # COM5 = board, never COM3
 ```
 
-Then connect to the AudioNode-Setup WiFi AP, open the portal, enter your WiFi + server, and play:
+Then connect to the AudioNode-Setup WiFi AP, open the portal, enter your WiFi + server, and play either way:
 
-```bash
-python send_pcm.py file "song.mp3" <board-ip> 1234
+```powershell
+# GUI (browser) — pick a file, play/seek/volume
+python -m audio_player.app            # from d:\esp-idf -> http://localhost:5000
+
+# or the CLI sender
+python audio_player\send_pcm.py file "song.mp3" <board-ip> 1234
 ```
 
 ## Proven building blocks (carried from TCP prototype)
@@ -109,9 +117,18 @@ TCP prototype is archived in git history. See CHANGELOG.md.
 
 ## Architecture documents
 
+All docs live in `docs/`:
+
+- README.md — this file (overview, hardware, quick start, proven blocks)
 - ARCHITECTURE.md — full data flow, protocol, packet validation, I2S byte-order, loss handling, factory reset, multi-node
-- SERVER_SETUP.md — server-side setup, Python sender usage, VLC alternative, firewall
-- GUIDELINES.md — development guidelines, decisions and reasons, acceptance criteria, session protocol, toolchain
+- SERVER_SETUP.md — server-side setup, Python sender usage, the browser app, VLC alternative, firewall
+- GUIDELINES.md — development guidelines, repository layout, decisions and reasons, acceptance criteria, session protocol, toolchain
 - PROJECT_STATE.md — live status, feature map, verified working, tried-and-failed, error log
 - CHANGELOG.md — chronological change log with commit references
 - .cline/rules/esp32-audio-node.md — essentials (single source of truth, read before every session)
+
+## Server side (the other half)
+
+`audio_player/` is the PC-side server: a browser GUI (library picker, play/stop,
+seek, volume) plus the same ffmpeg→RTP pipeline the CLI sender uses. It needs
+only Python 3 + ffmpeg (via `imageio-ffmpeg`). See SERVER_SETUP.md.

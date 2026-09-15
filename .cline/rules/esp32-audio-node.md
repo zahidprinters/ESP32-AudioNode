@@ -16,7 +16,7 @@
   `env.ps1` sets IDF_PATH, toolchain, Python venv, CCACHE, ESP_IDF_VERSION — it mirrors
   `C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1` (the official EIM profile).
   `export.bat` from the IDF tree does NOT work (EIM install layout is different).
-- Build commands (from `d:\esp-idf\audio_node`):
+- Build commands (from `d:\esp-idf\firmware`):
   ```powershell
   idf.py set-target esp32s3
   idf.py build

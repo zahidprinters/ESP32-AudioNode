@@ -1,6 +1,18 @@
-tmp/
+# --- build / tooling artifacts -------------------------------------------
 build/
 sdkconfig.old
-logs/*.tmp
-audio_node/managed_components/
-audio_node/dependencies.lock__pycache__/
+firmware/managed_components/
+__pycache__/
+*.pyc
+
+# --- raw dumps --------------------------------------------------------------
+# Curated per-session evidence lives in logs/*.md; raw monitor/build dumps do not.
+logs/*.log
+
+# --- media ------------------------------------------------------------------
+# Audio content is local: audio_player/config.py recreates the folder on import.
+audio_player/media/
+
+# --- scratch ---------------------------------------------------------------
+# tmp/ is disposable: experiments, dumps, throwaway scripts.
+tmp/

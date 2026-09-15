@@ -28,7 +28,7 @@ It tracks: current focus, feature map, verified working, tried-and-failed, error
 
 ## CLEAN CODEBASE RULES (strict)
 - **One canonical file per purpose.** Never create test_2.py, sender_v2.py, main_copy.c, etc. If a file needs changes, EDIT the existing file — never duplicate under a new name.
-- **One test script** for the sender (`server/send_pcm.py`), one main firmware entry (`main/main.c`). Variation happens via CLI arguments, not new files.
+- **One test script** for the sender (`audio_player/send_pcm.py`), one main firmware entry (`firmware/main/main.c`). Variation happens via CLI arguments, not new files.
 - **Experiments go in `tmp/`** (workspace root). Anything experimental, scratch, WIP, or disposable lives in `tmp/` — it is git-ignored and periodically deleted. Nothing experimental ever sits in the real code tree.
 - Old/abandoned files are **deleted**, not renamed or left behind.
 - Log files go in `logs/` (one file per session/milestone), never scattered in source folders.

@@ -6,7 +6,39 @@ How to run the audio server that sends PCM audio to one or more AudioNode boards
 
 The server reads audio (from a file, the PC's speaker output, or a generated tone), encodes it to RTP L16 (48 kHz / 16-bit / mono / 20 ms frames), and sends it via UDP to the board's IP on port 1234.
 
-The **primary** server is the Python sender `server/send_pcm.py`. VLC is documented as an alternative, but note that VLC does not have a clean GUI path for sending raw L16/RTP to a unicast IP — use the Python sender for reliability.
+The **server side lives in `audio_player/`** and has two front ends:
+
+| | Command | Use it for |
+|---|---|---|
+| **Browser app** (recommended) | `python -m audio_player.app` → http://localhost:5000 | Everyday use: pick a song from a folder, play/stop/seek/volume, see the live position |
+| **CLI sender** | `python audio_player\send_pcm.py …` | Scripting, quick connectivity/tone tests, CI-ish checks |
+
+Both drive the same ffmpeg → RTP L16 → UDP pipeline. VLC is documented as an alternative, but note that VLC does not have a clean GUI path for sending raw L16/RTP to a unicast IP — use `audio_player` for reliability.
+
+## Browser app (recommended)
+
+```powershell
+cd d:\esp-idf
+python -m audio_player.app            # UI at http://localhost:5000
+```
+
+Useful flags:
+
+```powershell
+python -m audio_player.app --library "D:\Music"
+python -m audio_player.app --node <board-ip>:1234 --node 192.168.100.94:1234
+python -m audio_player.app --port 8080
+```
+
+Then open http://localhost:5000 (use the literal IP `127.0.0.1` if `localhost` feels slow —
+on Windows, `localhost` costs ~2 s per request in name resolution), point the library
+box at your music folder, press Scan, pick a file, press Play.
+
+Defaults (node IP/port, library root, volume) live in `audio_player/config.py`.
+
+Run the built-in check any time with `python -m audio_player.selftest` — it validates the
+RTP wire format, the frame math, the real send rate, position-across-restart, and the
+UI's element-ID contract (29 asserts, no test framework).
 
 ## Prerequisites
 
@@ -38,12 +70,14 @@ idf.py -p COM5 monitor --no-reset
 
 Or read it from the setup web page if the board shows it there.
 
-## Usage
+## Usage (CLI sender)
+
+Run from the repository root (`d:\esp-idf`):
 
 ```bash
-python send_pcm.py file  <path>  <board_ip> [port] [vol]
-python send_pcm.py loop  <board_ip> [port] [vol]
-python send_pcm.py tone  <board_ip> [port] [freq] [seconds] [vol]
+python audio_player\send_pcm.py file  <path>  <board_ip> [port] [vol]
+python audio_player\send_pcm.py loop  <board_ip> [port] [vol]
+python audio_player\send_pcm.py tone  <board_ip> [port] [freq] [seconds] [vol]
 ```
 
 Defaults: port = 1234, vol = 1.0.
@@ -53,8 +87,8 @@ Defaults: port = 1234, vol = 1.0.
 Decode an audio file (mp3, flac, wav, aac, etc.) via ffmpeg to 48 kHz / 16-bit / mono raw PCM and stream it as RTP in real time:
 
 ```bash
-python send_pcm.py file "D:\New folder\song.mp3" <board-ip>
-python send_pcm.py file "D:\New folder\song.mp3" <board-ip> 1234
+python audio_player\send_pcm.py file "D:\New folder\song.mp3" <board-ip>
+python audio_player\send_pcm.py file "D:\New folder\song.mp3" <board-ip> 1234
 ```
 
 Real-time pacing: the sender sleeps briefly after each frame so playback on the board matches real time (the board's jitter buffer won't underrun).
@@ -64,7 +98,7 @@ Real-time pacing: the sender sleeps briefly after each frame so playback on the 
 Capture whatever is playing through the PC's speakers via WASAPI loopback and stream it as RTP. VLC (or any media player) controls play/pause/volume on the PC; the board mirrors the PC speakers.
 
 ```powershell
-python send_pcm.py loop <board-ip>
+python audio_player\send_pcm.py loop <board-ip>
 ```
 
 ### Loop mode (Mac / Linux)
@@ -82,8 +116,8 @@ Loopback support for Mac/Linux is a future helper. For now those platforms use `
 Generate a sine tone at the given frequency and stream it as RTP. Useful for verifying connectivity, volume, and the RGB LED VU behavior:
 
 ```bash
-python send_pcm.py tone <board-ip> 1234 1000 30 0.5   # 30s of 1kHz @ 0.5
-python send_pcm.py tone <board-ip>                    # default: 1kHz, 30s, vol 0.5
+python audio_player\send_pcm.py tone <board-ip> 1234 1000 30 0.5   # 30s of 1kHz @ 0.5
+python audio_player\send_pcm.py tone <board-ip>                    # default: 1kHz, 30s, vol 0.5
 ```
 
 ## Volume / headroom
@@ -122,13 +156,21 @@ If you want to experiment with VLC sending raw PCM/RTP today, it requires manual
 
 ## Multi-node (many boards, one server)
 
-Send the same stream to each board's IP:port:
+With the browser app, pass several `--node` flags (or edit `cfg.nodes` in
+`audio_player/config.py`) and every packet goes to each node — one stream, many
+speakers:
 
-```bash
-python send_pcm.py file song.mp3 <board-ip> 1234   # board #1
-python send_pcm.py file song.mp3 192.168.100.94 1234   # board #2
+```powershell
+python -m audio_player.app --node <board-ip>:1234 --node 192.168.100.94:1234
 ```
 
-For a single sender pushing to many boards at once, run multiple sender instances (one per board) or extend the sender to hold several UDP sockets. The simplest production setup: one sender invocation per board, or a wrapper that fans out to N board IPs.
+With the CLI sender, run one instance per board:
 
-This is unicast (one packet per board). Multicast (239.x) would reduce server bandwidth but is a future enhancement — AP/router multicast behavior varies.
+```bash
+python audio_player\send_pcm.py file song.mp3 <board-ip> 1234   # board #1
+python audio_player\send_pcm.py file song.mp3 192.168.100.94 1234   # board #2
+```
+
+This is unicast (one packet per board; the app loops over the node list). Multicast
+(239.x) would reduce server bandwidth but is a future enhancement — AP/router
+multicast behavior varies.
