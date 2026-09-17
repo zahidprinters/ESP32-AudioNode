@@ -8,9 +8,9 @@ These are the working rules for this project: what exists, what's proven, how to
 
 **ESP-IDF v6.1** at `D:\esp32\v6.1\esp-idf`, tools at `C:\Espressif\tools` (EIM install — `export.bat` does NOT work).
 
-Single canonical environment: `D:\esp-idf\env.ps1` (PowerShell).
+Single canonical environment: `D:\esp-idf\tools\env.ps1` (PowerShell).
 ```powershell
-. D:\esp-idf\env.ps1
+. D:\esp-idf\tools\env.ps1
 cd d:\esp-idf\firmware
 idf.py set-target esp32s3
 idf.py build
@@ -128,7 +128,7 @@ esp32-audio-node/
 ├── docs/                   # all project documentation
 │   ├── HARDWARE.md         # hardware, overview, development history
 │   ├── ARCHITECTURE.md
-│   ├── SERVER_SETUP.md
+│   ├── SETUP.md
 │   ├── GUIDELINES.md      # this file
 │   ├── CHANGELOG.md       # repo-level change log
 │   └── PROJECT_STATE.md
@@ -136,7 +136,7 @@ esp32-audio-node/
 ├── README.md             # project overview, quick start, node setup, checks
 ├── pyproject.toml        # packaging metadata (`pip install -e .`)
 ├── requirements.txt      # minimum dependency versions (not a lockfile)
-├── env.ps1               # ESP-IDF v6.1 environment (PowerShell) — only needed for firmware builds
+├── tools/env.ps1        # ESP-IDF v6.1 environment (PowerShell) — only needed for firmware builds
 ├── .gitignore
 ├── logs/                 # session logs
 └── tmp/                  # scratch (git-ignored)
@@ -189,9 +189,9 @@ python -m audio_player.app --library "D:\Music" --node <board-ip>:1234
 
 **ESP-IDF v6.1** at `D:\esp32\v6.1\esp-idf`, tools at `C:\Espressif\tools` (EIM install — `export.bat` does NOT work).
 
-Single canonical environment: `D:\esp-idf\env.ps1` (PowerShell).
+Single canonical environment: `D:\esp-idf\tools\env.ps1` (PowerShell).
 ```powershell
-. D:\esp-idf\env.ps1
+. D:\esp-idf\tools\env.ps1
 cd d:\esp-idf\firmware
 idf.py set-target esp32s3
 idf.py build

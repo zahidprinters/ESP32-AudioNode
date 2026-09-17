@@ -73,7 +73,7 @@ idf.py -p COM5 flash
 idf.py -p COM5 monitor --no-reset
 ```
 
-Replace COM5 with your board's port. `env.ps1` is specific to the original Windows
+Replace COM5 with your board's port. `tools/env.ps1` is specific to the original Windows
 installation; use your own ESP-IDF environment on other machines.
 
 ## Checks
@@ -90,10 +90,12 @@ These checks do not replace listening tests and serial observation on hardware.
 
 - [Hardware overview and development history](docs/HARDWARE.md)
 - [Architecture and wire format](docs/ARCHITECTURE.md)
-- [Server setup, CLI sender, and EQ](docs/SERVER_SETUP.md)
+- [Server setup, CLI sender, and EQ](docs/SETUP.md)
 - [Development guidelines](docs/GUIDELINES.md)
-- [Changelog](docs/CHANGELOG.md)
+- [Changelog](CHANGELOG.md)
 - [Project state and outstanding verification](docs/PROJECT_STATE.md)
+- [Firmware build notes](firmware/README.md)
+- [PC app notes](audio_player/README.md)
 
 `firmware/` is ESP-IDF source; `audio_player/` is the PC app; `logs/` contains
 historical evidence; `tmp/` is ignored scratch space. Historical docs contain
@@ -113,7 +115,7 @@ whole Git history was rewritten and then verified to contain no Wi-Fi password o
 SSID. That rewrite changed every commit hash, so cloned copies must be re-cloned.
 
 Two exceptions to keep in mind: **private LAN addresses from the development network
-still appear in historical docs and logs** (`docs/CHANGELOG.md`,
+still appear in historical docs and logs** (`CHANGELOG.md`,
 `docs/PROJECT_STATE.md`, `logs/`), and **rotate your Wi-Fi password if it was ever
 shared** — history scrubbing does not un-share a secret. Ignore rules never remove
 secrets from previous commits, so keep `audio_player/nodes.json`, `eq_presets.json`,
@@ -121,6 +123,4 @@ and real media out of commits (all git-ignored by default).
 
 ## License
 
-No project license has been selected. Public visibility alone does not grant reuse
-rights. Select a license before advertising an open-source release; dependencies
-retain their own licenses.
+MIT — see [LICENSE](LICENSE). Dependencies retain their own licenses.

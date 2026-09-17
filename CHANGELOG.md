@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to the **AudioNode WiFi speaker box** project are documented here.
+All notable changes to the **ESP32 AudioNode** project are documented here.
 Format: latest first. Each entry maps to a git commit. See each doc file (README, ARCHITECTURE, etc.) for current state.
 
 ---
@@ -24,8 +24,24 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 - **Scratch/build artifacts removed** (`a/`, `dist/`, `build/`, `AudioPlayer.egg-info/`,
   unused `audio_player/static/js/help.js`); `.gitignore` extended for raw log dumps,
   `tmp/`, media, `nodes.json` and `eq_presets.json`.
-- **Known remaining exceptions** (documented in the README): private development LAN
-  addresses still appear in historical docs/logs, and no license has been selected.
+- **License**: MIT (`LICENSE`), declared in `pyproject.toml` via PEP 639
+  (`license = "MIT"` + `license-files`).
+- **Known remaining exception** (documented in the README): private development LAN
+  addresses still appear in historical docs/logs. They are RFC 1918 addresses, not
+  credentials, and the Wi-Fi password is absent from every commit.
+
+### Project polish (2026-09-17)
+- **Tree finalized**: root holds only project-wide meta-files (`README.md`,
+  `CHANGELOG.md`, `LICENSE`, `pyproject.toml`, `requirements.txt`, `env.ps1`,
+  `.gitignore`, `.gitattributes`) plus the three components — `firmware/`,
+  `audio_player/`, `docs/` — and `logs/` for curated evidence.
+- **`CHANGELOG.md` moved to the repository root** (conventional location); all
+  references updated.
+- **Per-component READMEs added**: `firmware/README.md` (hardware, pins, build/flash
+  loop) and `audio_player/README.md` (architecture, REST/Socket.IO API, EQ, CLI).
+  One canonical changelog is kept — components point at the root file.
+- **Dead code removed**: two unused imports in `audio_player/player.py`.
+- **Junk removed**: `tmpREADME.md`, tracked `firmware/sdkconfig.old`, raw log dumps.
 
 ### Added
 - **`audio_player/` browser app (V1)** — Flask + Flask-SocketIO (eventlet) + ffmpeg

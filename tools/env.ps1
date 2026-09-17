@@ -1,5 +1,5 @@
 # env.ps1 — single canonical ESP-IDF v6.1 environment (mirrors C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1)
-# Usage:  . D:\esp-idf\env.ps1   then run: idf.py build   (from project dir)
+# Usage:  . D:\esp-idf\tools\env.ps1   then run: idf.py build   (from project dir)
 $env:IDF_PATH = "d:\esp32\v6.1\esp-idf"
 $env:IDF_TOOLS_PATH = "C:\Espressif\tools"
 $env:IDF_PYTHON_ENV_PATH = "C:\Espressif\tools\python\v6.1\venv"

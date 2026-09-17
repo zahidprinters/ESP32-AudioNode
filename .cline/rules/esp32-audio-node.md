@@ -11,7 +11,7 @@
 - Tools/env at `C:\Espressif\tools` (v6.1: xtensa-esp-elf, python venv v6.1)
 - Environment (Windows, canonical):
   ```powershell
-  . D:\esp-idf\env.ps1
+  . D:\esp-idf\tools\env.ps1
   ```
   `env.ps1` sets IDF_PATH, toolchain, Python venv, CCACHE, ESP_IDF_VERSION — it mirrors
   `C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1` (the official EIM profile).
@@ -74,7 +74,7 @@ If the SD pin is left at VDD, the MAX98357A is at its minimum gain (3 dB) — di
 ## Documentation references
 - `README.md` — project overview, hardware, quick start, proven building blocks
 - `ARCHITECTURE.md` — full data flow, RTP protocol spec, packet validation, loss handling, I2S byte-order, WiFi modes, factory reset, multi-node
-- `SERVER_SETUP.md` — server-side setup (Windows/Mac/Linux), sender usage (file/loop/tone), VLC alternative, firewall, multi-node
+- `SETUP.md` — server-side setup (Windows/Mac/Linux), sender usage (file/loop/tone), VLC alternative, firewall, multi-node
 - `GUIDELINES.md` — toolchain, build/flash/test loop, commit policy, file hygiene, anti-patterns, TCP archive
 - `PROJECT_STATE.md` — live status, feature map, verified working, tried-and-failed, decisions, next steps
 

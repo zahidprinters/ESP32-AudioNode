@@ -7,8 +7,22 @@ name = "esp32-audio-node"
 dynamic = ["version"]
 description = "ESP32-S3 Wi-Fi speaker firmware plus a browser-based Python player that streams 48 kHz mono audio as RTP L16 over UDP, with node management and a 10-band equalizer."
 readme = "README.md"
-# No license selected yet — do not declare one until the author chooses.
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Nadeem" }]
 requires-python = ">=3.11"
+keywords = ["esp32", "esp32s3", "esp-idf", "i2s", "max98357a", "rtp", "udp",
+            "audio-streaming", "wifi-speaker", "flask", "equalizer"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Multimedia :: Sound/Audio :: Players",
+]
 dependencies = [
     "numpy",
     "imageio-ffmpeg",

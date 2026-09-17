@@ -16,10 +16,9 @@ import struct
 import subprocess
 import threading
 import logging
-from audio_player.config import (RTP_SRATE, RTP_PT, RTP_PORT, RTP_FRAME_MS,
-                                  RTP_SAMPLES_PER_FRAME, RTP_BYTES_PER_FRAME,
-                                  FFMPEG_EXE, cfg, EQ_BANDS, EQ_MIN_DB,
-                                  EQ_MAX_DB, eq_save)
+from audio_player.config import (RTP_SRATE, RTP_PT, RTP_SAMPLES_PER_FRAME,
+                                  RTP_BYTES_PER_FRAME, FFMPEG_EXE, cfg, EQ_BANDS,
+                                  EQ_MIN_DB, EQ_MAX_DB, eq_save)
 
 _log = logging.getLogger("audio_player.player")
 

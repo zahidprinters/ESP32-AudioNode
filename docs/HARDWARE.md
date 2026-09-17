@@ -61,7 +61,7 @@ esp32-audio-node/
 │   ├── templates/       #   UI HTML
 │   ├── static/          #   UI js/css
 │   └── media/           #   default library root
-├── docs/                # README, ARCHITECTURE, SERVER_SETUP, GUIDELINES,
+├── docs/                # README, ARCHITECTURE, SETUP, GUIDELINES,
 │                        # CHANGELOG, PROJECT_STATE
 ├── logs/                # session logs
 ├── tmp/                 # scratch (git-ignored)
@@ -80,12 +80,12 @@ UDP: destination = board IP :1234, source IP = configured server IP (whitelist)
 
 The board validates every datagram (version, PT, length, source IP, seq/timestamp) before feeding PCM to the jitter ring buffer. Missing packets → silence fill. Never block I2S on a missing UDP packet.
 
-See ARCHITECTURE.md for the full spec, SERVER_SETUP.md for running the sender.
+See ARCHITECTURE.md for the full spec, SETUP.md for running the sender.
 
 ## Quick start
 
 ```powershell
-. D:\esp-idf\env.ps1
+. D:\esp-idf\tools\env.ps1
 cd esp32-audio-node/firmware
 idf.py set-target esp32s3
 idf.py build
@@ -121,7 +121,7 @@ All docs live in `docs/`:
 
 - HARDWARE.md — this file (overview, hardware, quick start, proven blocks)
 - ARCHITECTURE.md — full data flow, protocol, packet validation, I2S byte-order, loss handling, factory reset, multi-node
-- SERVER_SETUP.md — server-side setup, Python sender usage, the browser app, VLC alternative, firewall
+- SETUP.md — server-side setup, Python sender usage, the browser app, VLC alternative, firewall
 - GUIDELINES.md — development guidelines, repository layout, decisions and reasons, acceptance criteria, session protocol, toolchain
 - PROJECT_STATE.md — live status, feature map, verified working, tried-and-failed, error log
 - CHANGELOG.md — chronological change log with commit references
@@ -131,4 +131,4 @@ All docs live in `docs/`:
 
 `audio_player/` is the PC-side server: a browser GUI (library picker, play/stop,
 seek, volume) plus the same ffmpeg→RTP pipeline the CLI sender uses. It needs
-only Python 3 + ffmpeg (via `imageio-ffmpeg`). See SERVER_SETUP.md.
+only Python 3 + ffmpeg (via `imageio-ffmpeg`). See SETUP.md.

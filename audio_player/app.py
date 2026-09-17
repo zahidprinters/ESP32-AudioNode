@@ -221,7 +221,7 @@ def create_app():
     def _local_net():
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            s.connect(("192.168.100.1", 9))  # no traffic sent (UDP connect)
+            s.connect(("192.168.1.1", 9))  # no traffic sent (UDP connect)
             ip = s.getsockname()[0]
         except Exception:
             return None
