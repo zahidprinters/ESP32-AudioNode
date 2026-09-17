@@ -7,6 +7,26 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### Repository / publication preparation (2026-09-17)
+- **Root `README.md`** added (project overview, PC-app quick start, node connection
+  steps, hardware table, checks, security notes); the old root-level overview became
+  `docs/HARDWARE.md`.
+- **Packaging metadata**: `pyproject.toml` (`pip install -e .`, console script
+  `audio-player`, version read dynamically from `audio_player.__version__`),
+  `requirements.txt` (minimum versions, not a lockfile), `audio_player/__init__.py`.
+- **`.gitattributes`** added: LF in-repo on every platform (`* text=auto eol=lf`),
+  binary asset rules, documentation paths excluded from language stats.
+- **Credential redaction**: the lab Wi-Fi SSID and development LAN addresses were
+  replaced with placeholders (`<ssid>`, `192.168.1.x`, `<board-ip>`) across docs,
+  logs and code. The Wi-Fi **password was never committed**. Git history was
+  rewritten (`git filter-branch` + expiry + `gc`), then verified: no password and no
+  SSID in any reachable commit. All commit hashes changed, so old clones are invalid.
+- **Scratch/build artifacts removed** (`a/`, `dist/`, `build/`, `AudioPlayer.egg-info/`,
+  unused `audio_player/static/js/help.js`); `.gitignore` extended for raw log dumps,
+  `tmp/`, media, `nodes.json` and `eq_presets.json`.
+- **Known remaining exceptions** (documented in the README): private development LAN
+  addresses still appear in historical docs/logs, and no license has been selected.
+
 ### Added
 - **`audio_player/` browser app (V1)** — Flask + Flask-SocketIO (eventlet) + ffmpeg
   (`imageio-ffmpeg`). Library picker with ffprobe durations, play/stop/seek/volume,

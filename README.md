@@ -88,7 +88,7 @@ These checks do not replace listening tests and serial observation on hardware.
 
 ## Documentation
 
-- [Hardware overview and development history](docs/README.md)
+- [Hardware overview and development history](docs/HARDWARE.md)
 - [Architecture and wire format](docs/ARCHITECTURE.md)
 - [Server setup, CLI sender, and EQ](docs/SERVER_SETUP.md)
 - [Development guidelines](docs/GUIDELINES.md)
@@ -107,9 +107,17 @@ and binds to all interfaces by default. Do not port-forward it. For local-browse
 access use `python -m audio_player.app --host 127.0.0.1`. RTP is unencrypted and
 source-IP filtering is not cryptographic authentication. Discover only on your LAN.
 
-Known Wi-Fi credentials are being redacted from working files. **Existing Git
-history still contains credentials: rotate them and sanitize history before any
-public push.** Ignore rules do not remove secrets from previous commits.
+The Wi-Fi **password was never committed**. The lab SSID and private LAN addresses
+that appeared in working files and docs were replaced with placeholders, and the
+whole Git history was rewritten and then verified to contain no Wi-Fi password or
+SSID. That rewrite changed every commit hash, so cloned copies must be re-cloned.
+
+Two exceptions to keep in mind: **private LAN addresses from the development network
+still appear in historical docs and logs** (`docs/CHANGELOG.md`,
+`docs/PROJECT_STATE.md`, `logs/`), and **rotate your Wi-Fi password if it was ever
+shared** — history scrubbing does not un-share a secret. Ignore rules never remove
+secrets from previous commits, so keep `audio_player/nodes.json`, `eq_presets.json`,
+and real media out of commits (all git-ignored by default).
 
 ## License
 

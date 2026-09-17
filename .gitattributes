@@ -1,0 +1,19 @@
+# Normalize line endings: LF in the repository, on every platform.
+# Without this, a Windows checkout converts to CRLF and re-adds files as modified.
+* text=auto eol=lf
+
+# Binary assets: never convert, never diff.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.mp3  binary
+*.wav  binary
+*.bin  binary
+*.elf  binary
+*.pdf  binary
+
+# Keep GitHub language stats honest.
+logs/*.md linguist-documentation
+docs/*.md linguist-documentation

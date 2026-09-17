@@ -1,4 +1,4 @@
-# AudioNode — WiFi speaker box
+# ESP32 AudioNode — WiFi speaker box
 
 A **networked speaker box**: an ESP32-S3 board that joins your WiFi, receives PCM audio over RTP/UDP from a server on the same network, and plays it out through a MAX98357A class-D amp.
 
@@ -49,7 +49,7 @@ A configurable, networkable speaker — drop it on any WiFi, point it at a serve
 ## Repository layout
 
 ```
-d:\esp-idf\
+esp32-audio-node/
 ├── firmware/            # ESP32 firmware (main, CMake, sdkconfig)
 ├── audio_player/        # PC server app: browser UI + RTP sender
 │   ├── app.py           #   Flask + Socket.IO backend (python -m audio_player.app)
@@ -86,7 +86,7 @@ See ARCHITECTURE.md for the full spec, SERVER_SETUP.md for running the sender.
 
 ```powershell
 . D:\esp-idf\env.ps1
-cd d:\esp-idf\firmware
+cd esp32-audio-node/firmware
 idf.py set-target esp32s3
 idf.py build
 idf.py -p COM5 flash
@@ -119,7 +119,7 @@ TCP prototype is archived in git history. See CHANGELOG.md.
 
 All docs live in `docs/`:
 
-- README.md — this file (overview, hardware, quick start, proven blocks)
+- HARDWARE.md — this file (overview, hardware, quick start, proven blocks)
 - ARCHITECTURE.md — full data flow, protocol, packet validation, I2S byte-order, loss handling, factory reset, multi-node
 - SERVER_SETUP.md — server-side setup, Python sender usage, the browser app, VLC alternative, firewall
 - GUIDELINES.md — development guidelines, repository layout, decisions and reasons, acceptance criteria, session protocol, toolchain

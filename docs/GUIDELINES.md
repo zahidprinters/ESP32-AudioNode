@@ -103,7 +103,7 @@ The TCP implementation (raw PCM over TCP, M0–M3) is archived, not deleted:
 
 ```
 
-d:/esp-idf/
+esp32-audio-node/
 ├── firmware/                 # ESP32 firmware (ESP-IDF v6.1, target esp32s3)
 │   ├── main/main.c           # app_main + WiFi/RTP/UDP receiver + setup AP + factory reset
 │   ├── main/CMakeLists.txt
@@ -126,13 +126,16 @@ d:/esp-idf/
 │   └── media/                # MP3 files (copied in for dev; UI can point elsewhere)
 │
 ├── docs/                   # all project documentation
-│   ├── README.md
+│   ├── HARDWARE.md         # hardware, overview, development history
 │   ├── ARCHITECTURE.md
 │   ├── SERVER_SETUP.md
 │   ├── GUIDELINES.md      # this file
 │   ├── CHANGELOG.md       # repo-level change log
 │   └── PROJECT_STATE.md
 │
+├── README.md             # project overview, quick start, node setup, checks
+├── pyproject.toml        # packaging metadata (`pip install -e .`)
+├── requirements.txt      # minimum dependency versions (not a lockfile)
 ├── env.ps1               # ESP-IDF v6.1 environment (PowerShell) — only needed for firmware builds
 ├── .gitignore
 ├── logs/                 # session logs

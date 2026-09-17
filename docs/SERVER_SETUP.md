@@ -26,7 +26,7 @@ Useful flags:
 
 ```powershell
 python -m audio_player.app --library "D:\Music"
-python -m audio_player.app --node <board-ip>:1234 --node 192.168.100.94:1234
+python -m audio_player.app --node <board-ip>:1234 --node 192.168.1.51:1234
 python -m audio_player.app --port 8080
 ```
 
@@ -179,14 +179,14 @@ With the browser app, pass several `--node` flags (or edit `cfg.nodes` in
 speakers:
 
 ```powershell
-python -m audio_player.app --node <board-ip>:1234 --node 192.168.100.94:1234
+python -m audio_player.app --node <board-ip>:1234 --node 192.168.1.51:1234
 ```
 
 With the CLI sender, run one instance per board:
 
 ```bash
 python audio_player\send_pcm.py file song.mp3 <board-ip> 1234   # board #1
-python audio_player\send_pcm.py file song.mp3 192.168.100.94 1234   # board #2
+python audio_player\send_pcm.py file song.mp3 192.168.1.51 1234   # board #2
 ```
 
 This is unicast (one packet per board; the app loops over the node list). Multicast
