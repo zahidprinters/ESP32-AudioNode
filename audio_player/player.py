@@ -18,7 +18,8 @@ import threading
 import logging
 from audio_player.config import (RTP_SRATE, RTP_PT, RTP_PORT, RTP_FRAME_MS,
                                   RTP_SAMPLES_PER_FRAME, RTP_BYTES_PER_FRAME,
-                                  FFMPEG_EXE, cfg)
+                                  FFMPEG_EXE, cfg, EQ_BANDS, EQ_MIN_DB,
+                                  EQ_MAX_DB, eq_save)
 
 _log = logging.getLogger("audio_player.player")
 
@@ -98,6 +99,7 @@ class Player:
         self._kill_ev.clear()
         self._start_pipeline_at(path, vol, 0.0)
         self._status_cb(state="playing", src=os.path.basename(path),
+                        src_path=os.path.abspath(path),
                         volume=self._volume)
 
     def stop(self):
@@ -122,8 +124,11 @@ class Player:
         self._volume = vol
         if self._running and self._src:
             # ffmpeg's volume is an input filter, so the pipeline must restart --
-            # but at the *current* position, not from 0:00.
+            # but at the *current* position, not from 0:00. seek() re-emits
+            # playing + volume.
             self.seek(self.sample_position)
+        else:
+            self._status_cb(volume=vol)     # keep /api/status honest when idle
 
     def seek(self, sample_pos: int):
         """Restart at sample_pos samples from the start of the file."""
@@ -143,6 +148,59 @@ class Player:
         self._stop_ev.clear()
         self._kill_ev.clear()
         self._start_pipeline_at(src, vol, pos_sec)
+        # The pipeline restart above resumes audio immediately; re-emit playing
+        # so /api/status and the UI don't stay on "stopped" after a seek or a
+        # live volume change (stop() inside this restart emits "stopped").
+        self._status_cb(state="playing", src=os.path.basename(src),
+                        src_path=os.path.abspath(src),
+                        volume=self._volume)
+
+    def _af_chain(self, vol: float) -> str:
+        """ffmpeg chain tuned to the measured speaker (logs/2026-09-15_tone-diagnosis.md).
+
+        highpass 65 Hz: song's 41 Hz sub-bass peak is unreproducible on this driver
+        and only eats headroom / causes mid intermodulation. Gentle bass shelf:
+        bass measured clean, -6@150 was over-corrected. Optional 10-band EQ
+        (VLC band centers) sits before the compressor. Limiter is LAST with a
+        0.5 ceiling so the board's x2 gain can never saturate, at ANY volume
+        or EQ setting."""
+        af = ""
+        if cfg.sub_hp_hz > 0:
+            af += f"highpass=f={cfg.sub_hp_hz:g},"
+        if cfg.bass_cut_db < 0:
+            af += f"lowshelf=f={cfg.bass_cut_hz:g}:g={cfg.bass_cut_db:g},"
+        if cfg.eq_enabled:
+            if abs(cfg.eq_preamp_db) >= 0.1:
+                af += f"volume={10 ** (cfg.eq_preamp_db / 20.0):.4f},"
+            for f_hz, g in zip(EQ_BANDS, cfg.eq_gains):
+                if abs(g) >= 0.25:          # flat bands add nothing but filters
+                    af += f"equalizer=f={f_hz:g}:t=q:w=1:g={g:+.1f},"
+        af += (f"acompressor=threshold=-18dB:ratio=3:attack=10:release=150,"
+               f"volume={vol:.3f},"
+               f"alimiter=limit={cfg.dac_ceiling:g}:level=disabled")
+        return af
+
+    def _eq_snapshot(self):
+        return {"enabled": cfg.eq_enabled, "preamp_db": cfg.eq_preamp_db,
+                "gains": list(cfg.eq_gains)}
+
+    def set_eq(self, enabled=None, preamp_db=None, gains=None):
+        """Update EQ state, persist it, and apply live (pipeline restart at the
+        current position — same mechanism as a volume change)."""
+        if enabled is not None:
+            cfg.eq_enabled = bool(enabled)
+        if preamp_db is not None:
+            cfg.eq_preamp_db = max(EQ_MIN_DB, min(EQ_MAX_DB, float(preamp_db)))
+        if gains is not None:
+            g = [float(x) for x in gains]
+            if len(g) != len(EQ_BANDS):
+                raise ValueError("expected %d band gains, got %d"
+                                 % (len(EQ_BANDS), len(g)))
+            cfg.eq_gains = [max(EQ_MIN_DB, min(EQ_MAX_DB, x)) for x in g]
+        eq_save()
+        if self._running and self._src:
+            self.seek(self.sample_position)
+        self._status_cb(eq=self._eq_snapshot())
 
     def _start_pipeline_at(self, src: str, vol: float, seek_sec: float):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -156,7 +214,7 @@ class Player:
             "-ac", "1",
             "-ar", str(RTP_SRATE),
             "-sample_fmt", "s16",
-            "-af", f"volume={vol:.3f}",
+            "-af", self._af_chain(vol),
             "-f", "s16le",
             "pipe:1",
         ]

@@ -21,6 +21,8 @@
 - **Repo restructured (2026-09-15)**: `audio_node/` → `firmware/`, all root `*.md` → `docs/`, new `audio_player/` PC app (`server/send_pcm.py` → `audio_player/send_pcm.py`). Firmware rebuild from the new `firmware/` path **VERIFIED**: `Project build complete`, 0 errors, `firmware/build/audio_node.bin` (901,232 B)
 - **audio_player V1 (browser app) VERIFIED on hardware (2026-09-15)**: Flask + Socket.IO (eventlet) + ffmpeg → RTP L16/UDP. 20 s stream: board `pkts=821 dropped=0`, `pcm = pkts × 1920` byte-exact, pkts deltas 250/250/251 per 5 s = **50 pkts/s (real time)**, position **1:1** with the wall clock, seek/volume/stop all correct. Full log: `logs/2026-09-15_app-v1-live.md`
 - Four app bugs were found by these tests and fixed (all in §4): position-loop deadlock, RTP pacing free-run (3x real time → `dropped=45`), position lost on pipeline restart, natural EOF stuck "playing"
+- **Tone-ladder diagnosis + retuned chain (2026-09-15 evening)**: 8-tone test through the real speaker → bass clean, **250 Hz–1 kHz distorts first**, 2k/4k cleanest; the song's sub-bass peaks at 41 Hz (unreproducible on a 3 W driver). ffmpeg chain now = 65 Hz highpass, −3 dB bass shelf @120 Hz, compressor, **alimiter @ 0.5** (with the board's ×2 gain, the DAC can never clip again at any UI volume). User: clearly better. Log: `logs/2026-09-15_tone-diagnosis.md`
+- **10-band EQ + presets added to the app (2026-09-15 evening)**: VLC grid (60/170/310/600 Hz, 1/3/6/12/14/16 kHz), preamp ±12 dB, live apply (pipeline restarts at position), **limiter stays last**; built-ins: Flat, Acoustic, Bass Booster, Bass Reducer, Classical, Pop, Rock / Metal, Vocal / Voice, Treble Boost, Mid Cut (speaker); user presets persist to `audio_player/eq_presets.json` (git-ignored). REST: GET/POST `/api/eq`, POST `/api/eq/preset` (apply), POST `/api/eq/presets` (save). Selftest green + API smoke-tested; **not yet committed — waiting on the user's ears**
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
 ## 2. FEATURE MAP (what exists / what's left)
@@ -42,6 +44,7 @@
 | **A4: repo restructure** | ✅ DONE 2026-09-15 | repo root | `firmware/` + `audio_player/` + `docs/`; stray root `main/`, `server/`, `build_html.py` deleted; `.gitignore` updated |
 | **P9: Multi-node unicast** | 🚧 PARTIAL | `audio_player/` | `player._send_frame` already loops over `cfg.nodes`, and the app takes repeatable `--node IP:PORT`; needs an on-hardware 2-board test |
 | **P10: Audio gain chain (amp quirk)** | ✅ DONE | `main/main.c` + sender | ×2 digital gain on board (SD pin=VDD → 3 dB amp min → +6 dB); sender headroom — unchanged |
+| **P11: 10-band EQ + presets (server-side)** | 🟡 code-complete, awaiting user ears | `audio_player/config.py`, `player.py`, `app.py`, `static/` | VLC 10-band grid + preamp; live apply via restart-at-position; alimiter stays LAST (never clip); 10 built-in presets + user presets in `eq_presets.json` (git-ignored) |
 
 ## 3. VERIFIED WORKING ✅ (do not break)
 **TCP prototype milestones — archived, audio pipeline reused in RTP build:**
@@ -172,7 +175,7 @@
 6. ✅ Failover→AP path — VERIFIED 2026-09-14 (bad SSID → 30 s → AP reopened by itself, NVS kept, portal recovery)
 7. ✅ P5 LED state fix — VERIFIED 2026-09-14 (blue breathing ↔ VU ↔ blue, no more stuck red)
 8. ✅ Repo restructure + `audio_player` V1 — VERIFIED 2026-09-15 (`firmware/` builds clean; app streams 50.0 pkts/s with `dropped=0`, position 1:1). Log: `logs/2026-09-15_app-v1-live.md`
-9. 🔲 **Listen to it** — play the MP3 from the UI to the board and confirm by ear (all automated checks pass; the last step is human)
+9. 🔲 **Listen + tune EQ** — play the MP3 from the UI, pick/tune a preset (250 Hz–1 kHz distorts first on this speaker; sliders + Save… in the EQ panel), then commit the EQ + retuned-chain milestone
 10. 🔲 P9: multi-node unicast on hardware (2 boards, one stream; the app already loops over `cfg.nodes`)
 11. 🔲 V2 candidates: node back-channel (board → server status packet), MP3/AAC RTP depacketizer on the board, playlist/next-track, `threading` async mode to drop the eventlet deprecation
 12. 🔲 Commit each verified milestone only

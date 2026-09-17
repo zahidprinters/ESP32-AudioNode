@@ -8,33 +8,59 @@
 </head>
 <body>
 <div class="app">
-  <header>
-    <h1>AudioPlayer</h1>
-    <p class="sub">RTP L16/UDP server for ESP32 AudioNode boards</p>
+  <header class="menubar">
+    <span class="brand">AudioPlayer</span>
+    <nav class="menus">
+      <div class="menu" data-menu>
+        <button class="menubtn" type="button">File</button>
+        <div class="dropdown">
+          <button type="button" data-act="choose-lib">Choose library…</button>
+          <button type="button" data-act="rescan">Rescan library</button>
+          <hr>
+          <button type="button" data-act="play">Play</button>
+          <button type="button" data-act="stop">Stop</button>
+        </div>
+      </div>
+      <div class="menu" data-menu>
+        <button class="menubtn" type="button">Nodes</button>
+        <div class="dropdown">
+          <button type="button" data-act="goto-nodes">Manage nodes…</button>
+          <button type="button" data-act="discover">Find boards on WiFi…</button>
+        </div>
+      </div>
+      <div class="menu" data-menu>
+        <button class="menubtn" type="button">Help</button>
+        <div class="dropdown">
+          <button type="button" data-act="help">Help…</button>
+          <button type="button" data-act="about">About…</button>
+        </div>
+      </div>
+    </nav>
   </header>
-
-  <section class="panel">
-    <h2>Library</h2>
-    <div class="row">
-      <label for="libRoot">Library folder:</label>
-      <input id="libRoot" type="text" placeholder="Pick a folder with MP3s...">
-      <button id="pickBtn" type="button">Choose folder</button>
-      <button id="rescanBtn" type="button">Rescan</button>
-    </div>
-    <p id="libInfo" class="muted">Loading library...</p>
-    <ul id="fileList" class="filelist"></ul>
-  </section>
 
   <p id="errorBox" class="error" hidden></p>
 
-  <section class="panel">
-    <h2>Player</h2>
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" data-tab="player">Player</button>
+    <button type="button" class="tab" data-tab="eq">Equalizer</button>
+    <button type="button" class="tab" data-tab="nodes">Nodes</button>
+  </nav>
+
+  <!-- Player tab -->
+  <section class="panel tabpane" id="tab-player">
     <div class="now-playing">
       <span id="nowSrc" class="nowSrc">No file selected</span>
     </div>
     <div class="transport">
       <button id="playBtn" type="button" class="play">Play</button>
       <button id="stopBtn" type="button">Stop</button>
+      <div class="row">
+        <label for="libRoot">Library folder:</label>
+        <input id="libRoot" type="text" placeholder="Pick a folder with MP3s...">
+        <button id="pickBtn" type="button">Choose folder</button>
+        <button id="rescanBtn" type="button">Rescan</button>
+      </div>
+      <p id="libInfo" class="muted">Loading library...</p>
     </div>
     <div class="seek-row">
       <input id="seekBar" type="range" min="0" max="1000" value="0" step="1"
@@ -47,14 +73,78 @@
              aria-label="Volume">
       <span id="volLabel" class="muted">1.00</span>
     </div>
+    <ul id="fileList" class="filelist"></ul>
   </section>
 
-  <section class="panel">
-    <h2>Nodes</h2>
+  <!-- Equalizer tab -->
+  <section class="panel tabpane" id="tab-eq" hidden>
+    <div class="eq-head">
+      <label class="eq-enable"><input id="eqEnable" type="checkbox"> Enable</label>
+      <select id="eqPreset" aria-label="EQ preset">
+        <option value="">Preset…</option>
+      </select>
+      <button id="eqSaveBtn" type="button">Save…</button>
+    </div>
+    <div id="eqSliders" class="eq-sliders" aria-label="EQ sliders"></div>
+    <p class="muted eq-hint">VLC band centers. Changes apply live (a tiny tick while
+      playing is the pipeline restarting at the same spot). Presets save to
+      eq_presets.json.</p>
+  </section>
+
+  <!-- Nodes tab -->
+  <section class="panel tabpane" id="tab-nodes" hidden>
+    <div class="row">
+      <button id="discoverBtn" type="button">Find boards on WiFi</button>
+      <input id="nodeIp" type="text" placeholder="Add by IP, e.g. 192.168.1.50">
+      <button id="nodeAddBtn" type="button">Add</button>
+      <span id="discInfo" class="muted"></span>
+    </div>
     <p id="nodeInfo" class="muted">Connecting...</p>
+    <ul id="discList" class="filelist disclist"></ul>
     <ul id="nodeList" class="nodelist"></ul>
   </section>
 </div>
+
+<footer class="statusbar">
+  <span id="stServer" class="stitem">server: ?</span>
+  <span id="stState" class="stitem">state: idle</span>
+  <span id="stNodes" class="stitem">nodes: ?</span>
+  <span id="stPos" class="stitem">pos: 0:00</span>
+  <span id="stVol" class="stitem">vol: 1.00</span>
+</footer>
+
+<!-- Help modal -->
+<dialog id="helpDlg" class="modal">
+  <h2>Help</h2>
+  <ol>
+    <li><b>Connect the board</b> — power it on; it joins your WiFi (IP shows on
+      its serial monitor, or see the Nodes tab). First boot: connect to the
+      <code>AudioNode-Setup</code> WiFi and open <code>http://192.168.4.1</code>.</li>
+    <li><b>Find it here</b> — Nodes tab → <b>Find boards on WiFi</b> scans your
+      network for Espressif boards; click <b>Add</b> on one. Or type its IP and
+      press Add.</li>
+    <li><b>Play</b> — Player tab → choose a library folder → click a file → Play.
+      Audio streams to every node in the Nodes list (UDP :1234).</li>
+    <li><b>Equalizer</b> — EQ tab → Enable, pick a preset or move sliders
+      (changes apply live; a tiny tick = pipeline restart). Save… stores your
+      own preset.</li>
+    <li><b>Board not found?</b> Same WiFi as this PC, no AP-isolation on the
+      router, and Windows firewall must allow python (UDP out is default-allow).</li>
+  </ol>
+  <button type="button" class="closebtn">Close</button>
+</dialog>
+
+<!-- About modal -->
+<dialog id="aboutDlg" class="modal">
+  <h2>About</h2>
+  <p><b>AudioPlayer</b> — browser audio server for ESP32 AudioNode boards.</p>
+  <p>RTP L16 over UDP (48 kHz, 16-bit, mono, 20 ms frames) — one ffmpeg pipeline
+     per stream. Board = UDP listener; source IP is whitelisted in firmware.</p>
+  <p class="muted">Gain chain: 65 Hz highpass, −3 dB bass shelf @120 Hz,
+     compressor, limiter @0.5 (board ×2 digital gain ⇒ DAC never clips).
+     EQ: 10-band VLC grid, limiter stays last.</p>
+  <button type="button" class="closebtn">Close</button>
+</dialog>
 
 <script src="/static/app.js"></script>
 </body>

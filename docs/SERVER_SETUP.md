@@ -154,6 +154,24 @@ If you want to experiment with VLC sending raw PCM/RTP today, it requires manual
   - No local firewall rule blocking outbound UDP to that subnet.
   - The WiFi AP is not in AP-isolation / client-isolation mode (that prevents devices on the same AP from talking to each other). Disable AP isolation on the router, or use a different AP.
 
+## Equalizer (browser app)
+
+The UI has a VLC-style 10-band equalizer (60 Hz … 16 kHz) with a preamp slider.
+Changes apply live while playing; the limiter stays last in the ffmpeg chain, so
+the board can never clip no matter what the EQ does.
+
+- **Enable** checkbox turns the EQ on/off. Off = the measured speaker-calibration
+  chain (65 Hz highpass, −3 dB bass shelf @ 120 Hz, compressor, limiter).
+- **Preset** dropdown: Flat, Acoustic, Bass Booster, Bass Reducer, Classical, Pop,
+  Rock / Metal, Vocal / Voice, Treble Boost, Mid Cut (speaker) — the last one
+  encodes this speaker's measured distortion zone (250 Hz–1 kHz,
+  `logs/2026-09-15_tone-diagnosis.md`).
+- **Save…** stores the current curve under a name of your choice, persisted in
+  `audio_player/eq_presets.json` (git-ignored per-user state).
+
+REST: `GET/POST /api/eq`, `POST /api/eq/preset` (apply by name), and
+`POST /api/eq/presets` (save current as a named preset).
+
 ## Multi-node (many boards, one server)
 
 With the browser app, pass several `--node` flags (or edit `cfg.nodes` in

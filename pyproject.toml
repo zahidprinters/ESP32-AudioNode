@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=74", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "esp32-audio-node"
+version = "0.1.0"
+description = "ESP32-S3 Wi-Fi speaker firmware plus a browser-based Python player that streams 48 kHz mono audio as RTP L16 over UDP, with node management and a 10-band equalizer."
+readme = "README.md"
+# No license selected yet — do not declare one until the author chooses.
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "imageio-ffmpeg",
+    "Flask",
+    "Flask-SocketIO",
+    "eventlet",
+    "simple-websocket",
+    "requests",
+]
+optional-dependencies = {windows_loopback = ["pyaudiowpatch"]}
+
+[project.scripts]
+audio-player = "audio_player.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["audio_player*"]
+
+[tool.setuptools.package-data]
+audio_player = ["templates/**/*", "static/**/*"]
+
+[tool.setuptools]
+include-package-data = true

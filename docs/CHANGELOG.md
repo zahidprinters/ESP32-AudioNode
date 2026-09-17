@@ -18,6 +18,13 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 - **`audio_player/selftest.py`** — `python -m audio_player.selftest`, 29 asserts, no
   framework. Includes a pacing regression test that measures the real send rate over
   a loopback UDP socket (~50 frames/s expected; ~150 with the pacing bug).
+- **10-band equalizer + presets in the browser app** — VLC band grid (60 Hz…16 kHz)
+  + preamp, live-applied by restarting the ffmpeg pipeline at the current position
+  (limiter stays last so the board can never clip); built-in presets (Acoustic,
+  Bass Booster/Reducer, Classical, Pop, Rock / Metal, Vocal / Voice, Treble Boost,
+  Flat, and the speaker-specific Mid Cut) plus named user presets saved to
+  `audio_player/eq_presets.json` (git-ignored). Selftest grew EQ-chain checks
+  (limiter-last invariant, clamping, preset normalization, save/load round trip).
 - **Repository restructure**: `audio_node/` → `firmware/`, all root `*.md` → `docs/`,
   new `audio_player/` app, `server/send_pcm.py` → `audio_player/send_pcm.py`.
 - **RTP L16/UDP receiver (P1)** — implemented in `main.c`, **verified on hardware 2026-09-13**: 30 s stream, 1272+ packets, `dropped=0`.

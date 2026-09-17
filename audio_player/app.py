@@ -13,11 +13,16 @@
 # per-node position readout are coarse. Fine for V1 (one node).
 
 import os
+import re
 import time
+import socket
 import logging
 import threading
+import subprocess
 
-from audio_player.config import cfg, RTP_SRATE, RTP_PORT
+from audio_player.config import (cfg, RTP_SRATE, RTP_PORT, EQ_BANDS,
+                                 EQ_MIN_DB, EQ_MAX_DB, EQ_BUILTIN_PRESETS,
+                                 eq_save, node_save, ESPRESSIF_OUIS)
 from audio_player.library import scan_library
 from audio_player.player import Player
 
@@ -52,7 +57,7 @@ def create_app():
 
     def _on_player_status(**kw):
         with status_lock:
-            for k in ("state", "src", "volume", "error"):
+            for k in ("state", "src", "volume", "error", "eq", "src_path"):
                 if k in kw:
                     status[k] = kw[k]
         payload = dict(kw)
@@ -72,14 +77,18 @@ def create_app():
                     status["position_s"] = pos_s
                     status["position_ms"] = pos_ms
                     state = status["state"]
+                    src = status.get("src")
                 # NB: never call _node_status() while holding status_lock.
                 # threading.Lock is not reentrant, so nesting it deadlocks the
                 # loop *and* every REST request waiting on the same lock.
                 nodes = _nodes_for(state, pos_s)
                 with status_lock:
                     status["nodes"] = nodes
+                # state/src ride along so a client that (re)connects between
+                # play/stop pushes still gets the current state (self-healing).
                 socketio.emit("player_status",
-                              {"position_s": pos_s, "position_ms": pos_ms,
+                              {"state": state, "src": src,
+                               "position_s": pos_s, "position_ms": pos_ms,
                                "nodes": nodes}, namespace="/")
             except Exception as e:
                 _log.debug("position loop: %s", e)
@@ -147,6 +156,167 @@ def create_app():
         except Exception as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"ok": True})
+
+    # ---- Equalizer (VLC-style 10-band; live-applied by player.set_eq) -----
+    def _eq_view():
+        return {"enabled": cfg.eq_enabled, "preamp_db": cfg.eq_preamp_db,
+                "gains": list(cfg.eq_gains)}
+
+    def _preset_names():
+        return sorted(set(EQ_BUILTIN_PRESETS) | set(cfg.eq_user_presets))
+
+    @app.route("/api/eq", methods=["GET"])
+    def api_eq_get():
+        return jsonify({"enabled": cfg.eq_enabled,
+                        "preamp_db": cfg.eq_preamp_db, "gains": cfg.eq_gains,
+                        "bands": EQ_BANDS, "min_db": EQ_MIN_DB,
+                        "max_db": EQ_MAX_DB, "presets": _preset_names()})
+
+    @app.route("/api/eq", methods=["POST"])
+    def api_eq_set():
+        data = request.get_json(silent=True) or {}
+        try:
+            player.set_eq(enabled=data.get("enabled"),
+                          preamp_db=data.get("preamp_db"),
+                          gains=data.get("gains"))
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"ok": True, "eq": _eq_view()})
+
+    @app.route("/api/eq/preset", methods=["POST"])
+    def api_eq_apply_preset():
+        name = str((request.get_json(silent=True) or {}).get("name", ""))
+        preset = EQ_BUILTIN_PRESETS.get(name) or cfg.eq_user_presets.get(name)
+        if preset is None:
+            return jsonify({"error": "no preset named %r" % name}), 404
+        if isinstance(preset, list):        # built-ins are gains-only lists
+            preset = {"preamp_db": 0.0, "gains": preset}
+        try:
+            player.set_eq(enabled=True,
+                          preamp_db=float(preset.get("preamp_db", 0.0)),
+                          gains=preset["gains"])
+        except Exception as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"ok": True, "eq": _eq_view()})
+
+    @app.route("/api/eq/presets", methods=["POST"])
+    def api_eq_save_preset():
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name", "")).strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        if name in EQ_BUILTIN_PRESETS:
+            return jsonify({"error": "built-in preset '%s' cannot be "
+                                      "overwritten" % name}), 400
+        cfg.eq_user_presets[name] = {"preamp_db": cfg.eq_preamp_db,
+                                     "gains": list(cfg.eq_gains)}
+        eq_save()
+        return jsonify({"ok": True, "presets": _preset_names()})
+
+    # ---- Node management + discovery --------------------------------------
+    # The board is a UDP *listener*; there is no board->server packet to sniff,
+    # so "discovery" = find Espressif MACs on the LAN: ping-sweep the /24 the
+    # server PC sits in (lwIP answers ICMP), then read the Windows ARP table
+    # and keep OUIs belonging to Espressif. Bounded: 2 rounds of 60 hosts.
+    def _local_net():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("192.168.100.1", 9))  # no traffic sent (UDP connect)
+            ip = s.getsockname()[0]
+        except Exception:
+            return None
+        finally:
+            s.close()
+        m = re.match(r"^(\d+\.\d+\.\d+)\.\d+$", ip)
+        return m.group(1) if m else None
+
+    def _arp_entries():
+        try:
+            out = subprocess.run(["arp", "-a"], capture_output=True, text=True,
+                                 timeout=10).stdout
+        except Exception:
+            return []
+        macs = {}
+        for line in out.splitlines():
+            mm = re.findall(r"(\d+\.\d+\.\d+\.\d+)\s+((?:[0-9a-f]{2}-){5}[0-9a-f]{2})",
+                            line, re.I)
+            for ip, mac in mm:
+                macs[ip] = mac.upper().replace(":", "-")
+        return sorted(macs.items())
+
+    def discover_nodes():
+        base = _local_net()
+        if not base:
+            return {"error": "could not determine the server's subnet"}
+        # Sweep 1..254 in chunks of ~64 concurrent pings (254 ping.exe at once
+        # would be heavy; 64 keeps it bounded and the whole sweep < ~10 s).
+        lo = 1
+        while lo <= 254:
+            hi = min(lo + 63, 254)
+            procs = []
+            for i in range(lo, hi + 1):
+                procs.append(subprocess.Popen(
+                    ["ping", "-n", "1", "-w", "400", "%s.%d" % (base, i)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)))
+            for p in procs:
+                try:
+                    p.wait(timeout=2)
+                except Exception:
+                    p.kill()
+            lo = hi + 1
+        found = []
+        for ip, mac in _arp_entries():
+            if not ip.startswith(base + "."):
+                continue
+            oui = mac[:8]
+            if any(oui == o.replace(":", "-") for o in ESPRESSIF_OUIS):
+                found.append(ip)
+        configured = {n["ip"] for n in cfg.nodes}
+        return {"subnet": base + ".0/24", "found": found,
+                "configured": sorted(configured)}
+
+    @app.route("/api/nodes", methods=["GET"])
+    def api_nodes_get():
+        return jsonify({"nodes": cfg.nodes})
+
+    @app.route("/api/nodes", methods=["POST"])
+    def api_nodes_add():
+        data = request.get_json(silent=True) or {}
+        ip = str(data.get("ip", "")).strip()
+        port = int(data.get("port", RTP_PORT))
+        name = str(data.get("name", "")).strip()
+        if not re.match(r"^\d{1,3}(\.\d{1,3}){3}$", ip):
+            return jsonify({"error": "valid IPv4 required"}), 400
+        if not (1 <= port <= 65535):
+            return jsonify({"error": "port out of range"}), 400
+        if any(n["ip"] == ip for n in cfg.nodes):
+            return jsonify({"error": "node %s already configured" % ip}), 400
+        if len(cfg.nodes) >= 16:
+            return jsonify({"error": "node limit (16) reached"}), 400
+        cfg.nodes.append({"ip": ip, "port": port,
+                          "name": name or ("node-%d" % (len(cfg.nodes) + 1))})
+        node_save()
+        _log.info("nodes: added %s:%d (%s)", ip, port, name)
+        return jsonify({"ok": True, "nodes": cfg.nodes})
+
+    @app.route("/api/nodes/remove", methods=["POST"])
+    def api_nodes_remove():
+        data = request.get_json(silent=True) or {}
+        ip = str(data.get("ip", "")).strip()
+        before = len(cfg.nodes)
+        cfg.nodes = [n for n in cfg.nodes if n["ip"] != ip]
+        if len(cfg.nodes) == before:
+            return jsonify({"error": "no node with ip %s" % ip}), 404
+        if not cfg.nodes:
+            return jsonify({"error": "cannot remove the last node"}), 400
+        node_save()
+        _log.info("nodes: removed %s", ip)
+        return jsonify({"ok": True, "nodes": cfg.nodes})
+
+    @app.route("/api/nodes/discover", methods=["POST"])
+    def api_nodes_discover():
+        return jsonify(discover_nodes())
 
     # ---- Socket.IO handlers (same ops, for WS-only clients) --------------
     @socketio.on("play", namespace="/")

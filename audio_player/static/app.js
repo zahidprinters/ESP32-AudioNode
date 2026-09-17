@@ -18,11 +18,7 @@
   // ---- library ----------------------------------------------------------
   function loadLibrary() {
     var root = STATE.root || $("libRoot").value.trim() || "";
-    if (!root) {
-      $("libInfo").textContent = "No library folder set. Choose one or type a path.";
-      return;
-    }
-    $("libInfo").textContent = "Scanning " + root + " ...";
+    $("libInfo").textContent = "Scanning " + (root || "default folder") + " ...";
     api("/api/library?root=" + encodeURIComponent(root))
       .then(function (d) {
         STATE.root = d.root || root;
@@ -32,7 +28,7 @@
         if (d.error) { showError(d.error); }
         if (STATE.files.length) {
           $("libInfo").textContent = STATE.files.length + " file(s) in " + STATE.root;
-          if (!STATE.src) { selectFile(0); }
+          if (!curPath()) { selectFile(0); }
         } else {
           $("libInfo").textContent = "No audio files found in " + STATE.root;
         }
@@ -45,7 +41,7 @@
     ul.innerHTML = "";
     STATE.files.forEach(function (f, i) {
       var li = document.createElement("li");
-      if (f.path === STATE.src) { li.className = "sel"; }
+      if (f.path === curPath()) { li.className = "sel"; }
       var name = document.createElement("span");
       name.className = "fname";
       name.textContent = f.name;
@@ -67,6 +63,7 @@
     var f = STATE.files[i];
     if (!f) { return; }
     STATE.src = f.path;
+    STATE.src_path = f.path;
     $("nowSrc").textContent = f.name +
       (f.duration_s != null ? "  -  " + formatS(f.duration_s) : "");
     var dur = f.duration_s || 0;
@@ -96,9 +93,11 @@
   }
 
   // ---- transport --------------------------------------------------------
+  function curPath() { return STATE.src_path || STATE.src || null; }
+
   function doPlay() {
-    if (!STATE.src) { pickFolder(); return; }
-    api("/api/play", { path: STATE.src, volume: STATE.volume })
+    if (!curPath()) { pickFolder(); return; }
+    api("/api/play", { path: curPath(), volume: STATE.volume })
       .then(function (d) {
         if (d.error) { showError(d.error); }
         else { $("playBtn").textContent = "Playing..."; }
@@ -111,7 +110,7 @@
       .then(function () {
         $("playBtn").textContent = "Play";
         $("seekBar").value = 0;
-        var f = STATE.files.find(function (x) { return x.path === STATE.src; });
+        var f = STATE.files.find(function (x) { return x.path === curPath(); });
         $("posLabel").textContent = "0:00 / " + formatS((f && f.duration_s) || 0);
       })
       .catch(function (e) { showError(e.message); });
@@ -133,7 +132,7 @@
   // ---- status rendering -------------------------------------------------
   function onStatus() {
     $("playBtn").textContent = STATE.state === "playing" ? "Playing..." : "Play";
-    var f = STATE.files.find(function (x) { return x.path === STATE.src; });
+    var f = STATE.files.find(function (x) { return x.path === curPath(); });
     var dur = (f && f.duration_s != null) ? f.duration_s : 0;
     $("seekBar").max = Math.max(1000, Math.round(dur * 10));   // 100 ms units
     // Server position is in ms; the slider counts 100 ms steps.
@@ -143,6 +142,7 @@
     $("posLabel").textContent =
       formatMs(STATE.position_ms) + " / " + formatS(dur);
     renderNodes();
+    renderFooter();
   }
 
   function renderNodes() {
@@ -163,8 +163,18 @@
       var ip = document.createElement("span");
       ip.className = "nodeip";
       ip.textContent = n.ip + ":" + n.port;
+      var rm = document.createElement("button");
+      rm.type = "button"; rm.textContent = "Remove"; rm.className = "noderem";
+      rm.addEventListener("click", function () {
+        if (!confirm("Remove node " + n.ip + "?")) { return; }
+        api("/api/nodes/remove", { ip: n.ip }).then(function (d) {
+          if (d.error) { showError(d.error); return; }
+          STATE.nodes = d.nodes; renderNodes(); renderFooter();
+        }).catch(function (e) { showError(e.message); });
+      });
       head.appendChild(nm);
       head.appendChild(ip);
+      head.appendChild(rm);
       var body = document.createElement("div");
       body.className = "nodebody";
       var st = document.createElement("span");
@@ -183,6 +193,105 @@
     $("nodeInfo").textContent = STATE.nodes.length + " node" +
       (STATE.nodes.length > 1 ? "s" : "") + " configured" +
       (live ? " - streaming" : "");
+  }
+
+  // ---- node discovery -----------------------------------------------------
+  function discoverBoards() {
+    $("discInfo").textContent = "Scanning network (a few seconds)…";
+    $("discoverBtn").disabled = true;
+    api("/api/nodes/discover", {}).then(function (d) {
+      $("discoverBtn").disabled = false;
+      if (d.error) { $("discInfo").textContent = ""; showError(d.error); return; }
+      var cfgd = d.configured || [];
+      var fresh = (d.found || []).filter(function (ip) {
+        return cfgd.indexOf(ip) < 0;
+      });
+      $("discInfo").textContent = (d.found || []).length + " board(s) on " +
+        d.subnet + (fresh.length ? " — " + fresh.length + " new" : " — all added");
+      renderDiscovered(d.found || [], cfgd);
+    }).catch(function (e) {
+      $("discoverBtn").disabled = false;
+      $("discInfo").textContent = "";
+      showError("Discovery failed: " + e.message);
+    });
+  }
+
+  function renderDiscovered(found, configured) {
+    var ul = $("discList");
+    if (!ul) { return; }
+    ul.innerHTML = "";
+    if (!found.length) {
+      var li = document.createElement("li");
+      li.className = "muted";
+      li.textContent = "No Espressif boards found (is the board on the same WiFi?)";
+      ul.appendChild(li);
+      return;
+    }
+    found.forEach(function (ip) {
+      var li = document.createElement("li");
+      var lbl = document.createElement("span");
+      lbl.className = "fname";
+      lbl.textContent = ip;
+      li.appendChild(lbl);
+      if (configured.indexOf(ip) >= 0) {
+        var tag = document.createElement("span");
+        tag.className = "fdur";
+        tag.textContent = "already added";
+        li.appendChild(tag);
+      } else {
+        var add = document.createElement("button");
+        add.type = "button"; add.textContent = "Add";
+        add.addEventListener("click", function () {
+          api("/api/nodes", { ip: ip }).then(function (d) {
+            if (d.error) { showError(d.error); return; }
+            STATE.nodes = d.nodes;
+            discoverBoards();     // refresh tags
+            renderFooter();
+          }).catch(function (e) { showError(e.message); });
+        });
+        li.appendChild(add);
+      }
+      ul.appendChild(li);
+    });
+  }
+
+  // ---- tabs / menus / footer / modals -------------------------------------
+  function showTab(name) {
+    var panes = document.querySelectorAll(".tabpane");
+    for (var i = 0; i < panes.length; i++) {
+      panes[i].hidden = panes[i].id !== "tab-" + name;
+    }
+    var tabs = document.querySelectorAll(".tab");
+    for (var j = 0; j < tabs.length; j++) {
+      tabs[j].className = "tab" + (tabs[j].getAttribute("data-tab") === name ?
+                                   " active" : "");
+    }
+  }
+
+  function closeMenus() {
+    var ms = document.querySelectorAll(".menu.open");
+    for (var i = 0; i < ms.length; i++) { ms[i].classList.remove("open"); }
+  }
+
+  function menuAction(act) {
+    if (act === "choose-lib") { pickFolder(); }
+    else if (act === "rescan") { loadLibrary(); }
+    else if (act === "play") { doPlay(); }
+    else if (act === "stop") { doStop(); }
+    else if (act === "goto-nodes") { showTab("nodes"); }
+    else if (act === "discover") { showTab("nodes"); discoverBoards(); }
+    else if (act === "help") { $("helpDlg").showModal(); }
+    else if (act === "about") { $("aboutDlg").showModal(); }
+  }
+
+  function renderFooter() {
+    $("stState").textContent = "state: " + STATE.state;
+    $("stNodes").textContent = "nodes: " + STATE.nodes.length +
+      (STATE.nodes.some(function (n) { return n.playing; }) ? " (streaming)" : "");
+    $("stPos").textContent = "pos: " + formatMs(STATE.position_ms);
+    $("stVol").textContent = "vol: " + Number(STATE.volume).toFixed(2);
+    $("stServer").textContent = "server: " + (socket && socket.connected ?
+                                              "connected" : "connecting…");
   }
 
   // ---- helpers ----------------------------------------------------------
@@ -213,6 +322,116 @@
       if (box.textContent === text) { box.hidden = true; }
     }, 8000);
   }
+  // ---- equalizer ---------------------------------------------------------
+  // VLC-style 10-band peaking EQ. Slider moves are debounced (each POST
+  // restarts the ffmpeg pipeline when playing, so don't spam it).
+  var EQ = { bands: [], min: -12, max: 12, presets: [] };
+  var eqTimer = null, eqDrags = 0;
+
+  function eqColumn(i, label) {
+    var col = document.createElement("div");
+    col.className = "eqcol" + (i < 0 ? " preamp" : "");
+    var s = document.createElement("input");
+    s.type = "range";
+    s.min = EQ.min; s.max = EQ.max; s.step = 0.5; s.value = 0;
+    s.id = i < 0 ? "eqPre" : "eqb" + i;
+    s.setAttribute("aria-label", label);
+    var db = document.createElement("span");
+    db.className = "eqdb";
+    db.id = i < 0 ? "eqPreDb" : "eqd" + i;
+    db.textContent = "0.0 dB";
+    var lb = document.createElement("span");
+    lb.className = "eqband";
+    lb.textContent = label;
+    s.addEventListener("input", function () { eqSetLabel(i); eqSchedulePush(); });
+    s.addEventListener("change", function () { eqSetLabel(i); eqPush(); });
+    s.addEventListener("pointerdown", function () { eqDrags++; });
+    s.addEventListener("pointerup", function () { eqDrags = Math.max(0, eqDrags - 1); });
+    col.appendChild(s);
+    col.appendChild(db);
+    col.appendChild(lb);
+    return col;
+  }
+
+  function bandLabel(hz) {
+    return hz >= 1000 ? (hz / 1000) + " kHz" : hz + " Hz";
+  }
+
+  function eqSetLabel(i) {
+    var el = i < 0 ? $("eqPre") : $("eqb" + i);
+    var lab = i < 0 ? $("eqPreDb") : $("eqd" + i);
+    var v = parseFloat(el.value);
+    lab.textContent = (v > 0 ? "+" : "") + v.toFixed(1) + " dB";
+  }
+
+  function eqStateFromUi() {
+    var gains = [];
+    for (var i = 0; i < EQ.bands.length; i++) {
+      gains.push(parseFloat($("eqb" + i).value));
+    }
+    return { enabled: $("eqEnable").checked,
+             preamp_db: parseFloat($("eqPre").value),
+             gains: gains };
+  }
+
+  function eqApplyState(eq) {
+    if (!eq) { return; }
+    $("eqEnable").checked = !!eq.enabled;
+    $("eqPre").value = eq.preamp_db;
+    eqSetLabel(-1);
+    for (var i = 0; i < EQ.bands.length; i++) {
+      $("eqb" + i).value = eq.gains[i];
+      eqSetLabel(i);
+    }
+  }
+
+  function eqSchedulePush() {
+    clearTimeout(eqTimer);
+    eqTimer = setTimeout(eqPush, 250);
+  }
+
+  function eqPush() {
+    api("/api/eq", eqStateFromUi()).then(function (d) {
+      if (d && d.error) { showError(d.error); }
+    }).catch(function (e) { showError("EQ apply failed: " + e.message); });
+  }
+
+  function refreshPresets(names, selected) {
+    var sel = $("eqPreset");
+    sel.innerHTML = "<option value=''>Preset…</option>";
+    names.forEach(function (p) {
+      var o = document.createElement("option");
+      o.value = p; o.textContent = p;
+      sel.appendChild(o);
+    });
+    if (selected) { sel.value = selected; }
+  }
+
+  function buildEqUi() {
+    api("/api/eq").then(function (d) {
+      if (d && d.error) { showError(d.error); return; }
+      EQ.bands = d.bands || [];
+      EQ.min = d.min_db; EQ.max = d.max_db; EQ.presets = d.presets || [];
+      var box = $("eqSliders");
+      box.appendChild(eqColumn(-1, "Preamp"));
+      EQ.bands.forEach(function (hz) {
+        box.appendChild(eqColumn(EQ.bands.indexOf(hz), bandLabel(hz)));
+      });
+      refreshPresets(EQ.presets);
+      eqApplyState(d);
+    }).catch(function (e) { showError("EQ load failed: " + e.message); });
+  }
+
+  function onSavePreset() {
+    var n = prompt("Save current EQ as preset (name):");
+    if (!n || !n.trim()) { return; }
+    api("/api/eq/presets", { name: n.trim() }).then(function (d) {
+      if (d.error) { showError(d.error); return; }
+      EQ.presets = d.presets || EQ.presets;
+      refreshPresets(EQ.presets, n.trim());
+    }).catch(function (e) { showError("Preset save failed: " + e.message); });
+  }
+
   // ---- WebSocket status push -------------------------------------------
   var socket = null;
 
@@ -233,6 +452,7 @@
     socket.on("player_status", function (d) {
       if (d.state !== undefined) { STATE.state = d.state; }
       if (d.src !== undefined) { STATE.src = d.src; }
+      if (d.src_path !== undefined) { STATE.src_path = d.src_path; }
       if (d.volume !== undefined) {
         STATE.volume = d.volume;
         $("volSlider").value = d.volume;
@@ -241,6 +461,7 @@
       if (d.position_s !== undefined) { STATE.position_s = d.position_s; }
       if (d.position_ms !== undefined) { STATE.position_ms = d.position_ms; }
       if (d.nodes !== undefined) { STATE.nodes = d.nodes; }
+      if (d.eq && eqDrags === 0) { eqApplyState(d.eq); }
       if (d.error) { showError(d.error); }
       onStatus();
     });
@@ -264,7 +485,7 @@
 
   // ---- wiring -----------------------------------------------------------
   $("playBtn").addEventListener("click", function () {
-    if (!STATE.src) { pickFolder(); return; }
+    if (!curPath()) { pickFolder(); return; }
     doPlay();
   });
   $("stopBtn").addEventListener("click", doStop);
@@ -287,9 +508,80 @@
     var v = $("libRoot").value.trim();
     if (v) { STATE.root = v; loadLibrary(); }
   });
+  $("eqEnable").addEventListener("change", eqPush);
+  $("eqPreset").addEventListener("change", function () {
+    var n = $("eqPreset").value;
+    if (!n) { return; }
+    api("/api/eq/preset", { name: n }).then(function (d) {
+      if (d.error) { showError(d.error); return; }
+      eqApplyState(d.eq);
+    }).catch(function (e) { showError("Preset apply failed: " + e.message); });
+  });
+  $("eqSaveBtn").addEventListener("click", onSavePreset);
+
+  // tabs, menus, nodes tab, modals
+  var tabs = document.querySelectorAll(".tab");
+  for (var t = 0; t < tabs.length; t++) {
+    tabs[t].addEventListener("click", function () {
+      showTab(this.getAttribute("data-tab"));
+    });
+  }
+  var menus = document.querySelectorAll("[data-menu]");
+  for (var m = 0; m < menus.length; m++) {
+    (function (menu) {
+      menu.querySelector(".menubtn").addEventListener("click", function (ev) {
+        ev.stopPropagation();
+        var was = menu.classList.contains("open");
+        closeMenus();
+        if (!was) { menu.classList.add("open"); }
+      });
+    })(menus[m]);
+  }
+  document.addEventListener("click", closeMenus);
+  var acts = document.querySelectorAll(".dropdown [data-act]");
+  for (var a = 0; a < acts.length; a++) {
+    acts[a].addEventListener("click", function () {
+      closeMenus();
+      menuAction(this.getAttribute("data-act"));
+    });
+  }
+  $("discoverBtn").addEventListener("click", discoverBoards);
+  $("nodeAddBtn").addEventListener("click", function () {
+    var ip = $("nodeIp").value.trim();
+    if (!ip) { showError("Enter an IP address first"); return; }
+    api("/api/nodes", { ip: ip }).then(function (d) {
+      if (d.error) { showError(d.error); return; }
+      STATE.nodes = d.nodes;
+      $("nodeIp").value = "";
+      renderNodes(); renderFooter();
+    }).catch(function (e) { showError(e.message); });
+  });
+  var closeBtns = document.querySelectorAll(".closebtn");
+  for (var c = 0; c < closeBtns.length; c++) {
+    closeBtns[c].addEventListener("click", function () {
+      this.closest("dialog").close();
+    });
+  }
 
   // ---- boot -------------------------------------------------------------
   $("libRoot").value = "";
   loadLibrary();
+  buildEqUi();
   connectWS();
+  // REST boot fill (footer/node list even before the first WS push).
+  api("/api/status").then(function (d) {
+    if (!d) { return; }
+    STATE.state = d.state || "idle";
+    STATE.src = d.src || null;
+    STATE.src_path = d.src_path || null;
+    STATE.volume = d.volume || 1.0;
+    STATE.position_ms = d.position_ms || 0;
+    STATE.nodes = d.nodes || [];
+    $("volSlider").value = STATE.volume;
+    $("volLabel").textContent = Number(STATE.volume).toFixed(2);
+    if (STATE.src) { $("nowSrc").textContent = STATE.src; }
+    renderNodes();
+    renderFooter();
+  }).catch(function () { /* server may still be starting */ });
+  showTab("player");
 })();

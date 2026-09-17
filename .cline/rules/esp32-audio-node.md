@@ -57,9 +57,9 @@ If the SD pin is left at VDD, the MAX98357A is at its minimum gain (3 dB) — di
 - 48000 Hz, 16-bit, MONO, I2S Philips standard, no MCLK (amp derives it)
 - Transport: **RTP L16 over UDP** (PT=96, 48 kHz, 16-bit, mono, 20 ms frames, ts +960/frame in samples)
 
-## Network
-- WiFi SSID: `<ssid>`  Password: `<password>`
-- Board IP (STA mode): <board-ip> (RSSI -32..-40 dBm = excellent)
+## Network (values shown are placeholders — use your own)
+- WiFi SSID / password: provisioned at runtime through the setup AP; never commit them
+- Board IP (STA mode): assigned by your router's DHCP — read it from the serial log
 - UDP port 1234 — sender sends RTP to board :1234
 - Board = UDP listener (server sends TO the board)
 

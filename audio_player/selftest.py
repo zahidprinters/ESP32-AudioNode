@@ -65,7 +65,11 @@ def test_ui_id_contract():
     js = open(os.path.join(HERE, "static", "app.js"), encoding="utf-8").read()
     ids = set(re.findall(r'id="(\w+)"', html))
     used = set(re.findall(r'\$\("(\w+)"\)', js))
-    missing = sorted(used - ids)
+    # eqColumn() builds the EQ slider columns at runtime (preamp + one per
+    # band), so their ids exist only in the DOM, never in index.html source.
+    dynamic = {"eqPre", "eqPreDb"}
+    dynamic |= {"eqb%d" % i for i in range(10)} | {"eqd%d" % i for i in range(10)}
+    missing = sorted(used - ids - dynamic)
     check("every $(\"id\") in app.js exists in index.html",
           not missing, "missing=%s" % missing if missing else "%d ids" % len(ids))
     check("index.html loads app.js", "/static/app.js" in html)
@@ -144,12 +148,79 @@ def test_config():
           cfg.library_root)
 
 
+def test_eq():
+    """10-band EQ: chain insertion, clamping, validation, persistence."""
+    print("Equalizer (VLC 10-band, limiter must stay last):")
+    import tempfile
+    from audio_player.player import Player
+    from audio_player import config as cf
+    p = Player()
+    saved = (cfg.eq_enabled, cfg.eq_preamp_db, list(cfg.eq_gains),
+             dict(cfg.eq_user_presets), cfg.eq_presets_path)
+    with tempfile.TemporaryDirectory() as td:
+        cfg.eq_presets_path = os.path.join(td, "eq.json")
+        try:
+            check("10 VLC bands, 60..16k", len(cf.EQ_BANDS) == 10 and
+                  cf.EQ_BANDS[0] == 60 and cf.EQ_BANDS[-1] == 16000)
+            # Built-in presets are gains-only lists; /api/eq/preset wraps them
+            # in a dict before use. Mirror that contract here.
+            bp = cf.EQ_BUILTIN_PRESETS["Mid Cut (speaker)"]
+            if isinstance(bp, list):
+                bp = {"preamp_db": 0.0, "gains": bp}
+            check("built-in preset normalizes to dict",
+                  isinstance(bp, dict) and len(bp["gains"]) == 10)
+            check("all built-in presets valid",
+                  all(len(g) == 10 and all(-12 <= x <= 12 for x in g)
+                      for g in cf.EQ_BUILTIN_PRESETS.values()))
+            cfg.eq_enabled = False
+            check("EQ off -> no equalizer filter",
+                  "equalizer" not in p._af_chain(1.0))
+            cfg.eq_enabled = True
+            cfg.eq_gains = [0, -4, 0, -6, 0, 0, 0, 0, 0, 0]
+            af = p._af_chain(1.0)
+            check("EQ on -> band filters for 170/600 Hz",
+                  "equalizer=f=170" in af and "equalizer=f=600" in af)
+            check("limiter stays LAST in chain",
+                  af.rfind("alimiter") > af.rfind("equalizer"))
+            cfg.eq_gains = [0.0] * 10
+            check("flat EQ adds no band filters",
+                  "equalizer" not in p._af_chain(1.0))
+            p.set_eq(enabled=True, preamp_db=-99, gains=[99] * 10)
+            check("preamp clamped to +-12 dB", cfg.eq_preamp_db == cf.EQ_MIN_DB)
+            check("gains clamped to +-12 dB", cfg.eq_gains[0] == cf.EQ_MAX_DB)
+            bad_len = False
+            try:
+                p.set_eq(gains=[0, 0, 0])
+            except ValueError:
+                bad_len = True
+            check("wrong gains length rejected", bad_len)
+            cfg.eq_gains = [1.5, 0, 0, 0, 0, 0, 0, 0, 0, -2.5]
+            cfg.eq_preamp_db = -1.0
+            cfg.eq_user_presets["__t"] = {"preamp_db": 2.0,
+                                          "gains": [3, 0, 0, 0, 0, 0, 0, 0, 0, 0]}
+            cf.eq_save()
+            cfg.eq_enabled = False
+            cfg.eq_preamp_db = 0.0
+            cfg.eq_gains = [0.0] * 10
+            cfg.eq_user_presets = {}
+            cf.eq_load()
+            check("state survives save/load (fresh-start path)",
+                  cfg.eq_preamp_db == -1.0 and cfg.eq_gains[0] == 1.5 and
+                  cfg.eq_gains[-1] == -2.5 and
+                  cfg.eq_user_presets["__t"]["gains"][0] == 3)
+        finally:
+            (cfg.eq_enabled, cfg.eq_preamp_db, cfg.eq_gains,
+             cfg.eq_user_presets, cfg.eq_presets_path) = saved
+            cf.eq_save()
+
+
 def main():
     print("audio_player selftest\n")
     test_rtp_header()
     test_frame_math()
     test_pacing()
     test_position_across_restart()
+    test_eq()
     test_ui_id_contract()
     test_config()
     print("")

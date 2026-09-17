@@ -1,5 +1,9 @@
 # --- build / tooling artifacts -------------------------------------------
 build/
+dist/
+*.egg-info/
+.venv/
+venv/
 sdkconfig.old
 firmware/managed_components/
 __pycache__/
@@ -8,10 +12,16 @@ __pycache__/
 # --- raw dumps --------------------------------------------------------------
 # Curated per-session evidence lives in logs/*.md; raw monitor/build dumps do not.
 logs/*.log
+logs/*.txt
 
 # --- media ------------------------------------------------------------------
 # Audio content is local: audio_player/config.py recreates the folder on import.
 audio_player/media/
+
+# --- user state -------------------------------------------------------------
+# EQ presets and the node list are per-user (created by the app at runtime).
+audio_player/eq_presets.json
+audio_player/nodes.json
 
 # --- scratch ---------------------------------------------------------------
 # tmp/ is disposable: experiments, dumps, throwaway scripts.
