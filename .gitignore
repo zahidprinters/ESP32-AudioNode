@@ -27,3 +27,7 @@ audio_player/settings.json
 # --- scratch ---------------------------------------------------------------
 # tmp/ is disposable: experiments, dumps, throwaway scripts.
 tmp/
+
+logs/*.log
+logs/*.err
+logs/*.txt
