@@ -13,6 +13,7 @@ __pycache__/
 # Curated per-session evidence lives in logs/*.md; raw monitor/build dumps do not.
 logs/*.log
 logs/*.txt
+logs/*.err
 
 # --- media ------------------------------------------------------------------
 # Audio content is local: audio_player/config.py recreates the folder on import.
@@ -27,7 +28,3 @@ audio_player/settings.json
 # --- scratch ---------------------------------------------------------------
 # tmp/ is disposable: experiments, dumps, throwaway scripts.
 tmp/
-
-logs/*.log
-logs/*.err
-logs/*.txt
