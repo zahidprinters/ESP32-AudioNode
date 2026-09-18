@@ -35,7 +35,7 @@ def create_app():
     from flask_socketio import SocketIO, emit
 
     app = Flask(__name__, static_folder="static", template_folder="templates")
-    socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
+    socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
 
     # ---- boot: load persisted user state (nodes, EQ, settings, schedules) ----
     # Saving worked but nothing ever LOADED these files — restarts lost nodes,
@@ -469,6 +469,20 @@ def create_app():
 
     threading.Thread(target=background_position_loop, name="pos-loop",
                      daemon=True).start()
+    # Background ticker: push player_status once a second so the browser
+    # seek bar / footer position track playback (state-change pushes alone
+    # leave the position frozen between events).
+    def background_status_tick():
+        while True:
+            time.sleep(1)
+            try:
+                socketio.emit("player_status", _status_snapshot(), namespace="/")
+            except Exception:
+                pass
+
+    threading.Thread(target=background_status_tick, name="status-tick",
+                     daemon=True).start()
+
     # Background scheduler: check every second and fire scheduled play/stop at
     # the right wall-clock time. Plans persist across restarts.
     def background_schedule_loop():

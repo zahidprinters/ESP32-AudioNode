@@ -103,7 +103,12 @@
   function curPath() { return STATE.src_path || STATE.src || null; }
 
   function doPlay() {
-    if (!curPath()) { pickFolder(); return; }
+    if (!curPath()) {
+      // Nothing selected yet: play the first library file if there is one,
+      // otherwise ask for a library folder.
+      if (STATE.files && STATE.files.length) { selectFile(0); }
+      if (!curPath()) { pickFolder(); return; }
+    }
     api("/api/play", { path: curPath(), volume: STATE.volume })
       .then(function (d) {
         if (d.error) { showError(d.error); }
@@ -147,7 +152,8 @@
   function onStatus() {
     $("playBtn").textContent = STATE.state === "playing" ? "Playing..." : "Play";
     var pb = $("pauseBtn");
-    pb.hidden = !(STATE.state === "playing" || STATE.state === "paused");
+    pb.hidden = false;
+    pb.disabled = !(STATE.state === "playing" || STATE.state === "paused");
     pb.textContent = STATE.state === "paused" ? "Resume" : "Pause";
     var f = STATE.files.find(function (x) { return x.path === curPath(); });
     var dur = (f && f.duration_s != null) ? f.duration_s : 0;
@@ -561,10 +567,7 @@
   }
 
   // ---- wiring -----------------------------------------------------------
-  $("playBtn").addEventListener("click", function () {
-    if (!curPath()) { pickFolder(); return; }
-    doPlay();
-  });
+  $("playBtn").addEventListener("click", doPlay);
   $("stopBtn").addEventListener("click", doStop);
   $("pauseBtn").addEventListener("click", doPause);
   $("pickBtn").addEventListener("click", pickFolder);
@@ -655,23 +658,26 @@
   }
 
   function settingsLoadUi() {
-    api("/api/settings").then(function (d) {
-      if (!d || d.error) { return; }
-      settingsFill(d.settings || {});
-      // populate the default-EQ dropdown with all known presets
-      var sel = $("setDefEq"), cur = sel.value;
-      api("/api/eq").then(function (e) {
-        if (!e) { return; }
-        sel.innerHTML = '<option value="">(none — last used)</option>';
-        (e.presets || []).forEach(function (p) {
-          var o = document.createElement("option");
-          o.value = p; o.textContent = p;
-          sel.appendChild(o);
-        });
-        sel.value = cur;
-      }).catch(function () { });
-    }).catch(function () { });
+    // Load the preset list first, then fill values — otherwise the saved
+    // default-EQ name is set before its <option> exists and gets lost.
+    Promise.all([
+      api("/api/settings").catch(function () { return null; }),
+      api("/api/eq").catch(function () { return null; })
+    ]).then(function (res) {
+      var d = res[0], e = res[1];
+      var sel = $("setDefEq");
+      var keep = sel.value;
+      sel.innerHTML = '<option value="">(none — last used)</option>';
+      ((e && e.presets) || []).forEach(function (p) {
+        var o = document.createElement("option");
+        o.value = p; o.textContent = p;
+        sel.appendChild(o);
+      });
+      sel.value = keep;
+      if (d && !d.error) { settingsFill(d.settings || {}); }
+    });
   }
+
 
   $("setSaveBtn").addEventListener("click", function () {
     api("/api/settings", {
@@ -703,6 +709,22 @@
   connectWS();
   settingsLoadUi();
   loadSchedules();
+  // Apply the saved default EQ profile to the live EQ tab on boot.
+  var bootDefaultPreset = null;
+  api("/api/settings").then(function (d) {
+    bootDefaultPreset = d && d.settings && d.settings.default_eq_preset;
+    if (!bootDefaultPreset) { return; }
+    return api("/api/eq/preset", { name: bootDefaultPreset });
+  }).then(function () {
+    return api("/api/eq");
+  }).then(function (e) {
+    if (e && e.eq) { eqApplyState(e.eq); }
+    var sel = $("eqPreset");
+    if (bootDefaultPreset && sel) {
+      sel.value = bootDefaultPreset;      // show which profile is active
+      if (sel.value !== bootDefaultPreset) { sel.value = ""; }
+    }
+  }).catch(function () { });
   // REST boot fill (footer/node list even before the first WS push).
   api("/api/status").then(function (d) {
     if (!d) { return; }

@@ -56,6 +56,7 @@ class Player:
         self._kill_ev = threading.Event()
         self._lock = threading.Lock()
         self._paused = False
+        self._paused_samples = 0
 
     @property
     def running(self):
@@ -72,6 +73,8 @@ class Player:
     @property
     def sample_position(self):
         """Playback position in samples (server-side: what we have sent)."""
+        if self._paused:
+            return self._paused_samples
         if not self._running:
             return 0
         # 2 bytes/sample, plus whatever was already played before this pipeline
@@ -116,6 +119,7 @@ class Player:
         self._kill_pipeline()
         self._running = False
         self._paused = False
+        self._paused_samples = 0
         self._seq = 0
         self._ts = 0
         self._bytes_sent = 0
@@ -127,6 +131,7 @@ class Player:
         from the same spot — _base_samples is preserved."""
         if not self._running:
             return
+        self._paused_samples = self.sample_position
         self._kill_ev.set()
         self._stop_ev.set()
         if self._thread and self._thread.is_alive():
@@ -140,11 +145,11 @@ class Player:
         """Resume from a paused state at the current position."""
         if not self._paused or not self._src:
             return
+        pos_sec = self.sample_position / RTP_SRATE   # read while still paused
         self._running = True
         self._paused = False
         self._stop_ev.clear()
         self._kill_ev.clear()
-        pos_sec = self.sample_position / RTP_SRATE
         self._start_pipeline_at(self._src, self._volume, pos_sec)
         self._status_cb(state="playing", src=os.path.basename(self._src),
                         src_path=os.path.abspath(self._src),
@@ -241,8 +246,12 @@ class Player:
         cmd = [
             FFMPEG_EXE,
             "-loglevel", "error",
-            "-ss", f"{seek_sec:.3f}",
             "-i", src,
+            # ponytail: -ss AFTER -i = accurate seek (decodes from start);
+            # input seek (-ss before -i) is fast but bitrate-estimated and
+            # lands tens of seconds off on VBR MP3. Files are minutes long,
+            # so the extra decode is <1 s. Upgrade path: maintain an index.
+            "-ss", f"{seek_sec:.3f}",
             "-vn",
             "-ac", "1",
             "-ar", str(RTP_SRATE),
