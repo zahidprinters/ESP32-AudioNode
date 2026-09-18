@@ -3,11 +3,18 @@
 // for status push. Seek bar works in 100 ms units (see onStatus/seek).
 (function () {
   var STATE = { state: "idle", src: null, volume: 1.0, position_s: 0,
-                position_ms: 0, nodes: [], files: [], root: "" };
+                position_ms: 0, nodes: [], files: [], root: "",
+                schedules: [], maxVolume: 10 };
   var $ = function (id) { return document.getElementById(id); };
 
-  function api(path, body) {
-    var opts = { method: body === undefined ? "GET" : "POST" };
+  function api(path, body, method) {
+    // Accept api(path, {method:"DELETE"}) shorthand used by the schedule list.
+    if (!method && body && typeof body.method === "string" &&
+        Object.keys(body).length === 1) {
+      method = body.method;
+      body = undefined;
+    }
+    var opts = { method: method || (body === undefined ? "GET" : "POST") };
     if (body !== undefined) {
       opts.headers = { "Content-Type": "application/json" };
       opts.body = JSON.stringify(body);
@@ -100,7 +107,6 @@
     api("/api/play", { path: curPath(), volume: STATE.volume })
       .then(function (d) {
         if (d.error) { showError(d.error); }
-        else { $("playBtn").textContent = "Playing..."; }
       })
       .catch(function (e) { showError(e.message); });
   }
@@ -116,10 +122,18 @@
       .catch(function (e) { showError(e.message); });
   }
 
+  function doPause() {
+    var paused = STATE.state === "paused";
+    api(paused ? "/api/resume" : "/api/pause", {})
+      .then(function (d) { if (d.error) { showError(d.error); } })
+      .catch(function (e) { showError(e.message); });
+  }
+
   function setVolume(v) {
+    v = Math.min(STATE.maxVolume, Math.max(0, v));   // clamp to settings ceiling
     STATE.volume = v;
     api("/api/volume", { volume: v })
-      .then(function (d) { if (d.error) { showError(d.error); } })
+      .then(function (d) { if (d.error) { showError(d.error); } renderFooter(); })
       .catch(function (e) { showError(e.message); });
   }
 
@@ -132,6 +146,9 @@
   // ---- status rendering -------------------------------------------------
   function onStatus() {
     $("playBtn").textContent = STATE.state === "playing" ? "Playing..." : "Play";
+    var pb = $("pauseBtn");
+    pb.hidden = !(STATE.state === "playing" || STATE.state === "paused");
+    pb.textContent = STATE.state === "paused" ? "Resume" : "Pause";
     var f = STATE.files.find(function (x) { return x.path === curPath(); });
     var dur = (f && f.duration_s != null) ? f.duration_s : 0;
     $("seekBar").max = Math.max(1000, Math.round(dur * 10));   // 100 ms units
@@ -256,6 +273,62 @@
   }
 
   // ---- tabs / menus / footer / modals -------------------------------------
+  // ---- scheduled play/stop ------------------------------------------------
+  function renderSchedule(plans) {
+    var ul = $("schedList");
+    if (!ul) { return; }
+    ul.innerHTML = "";
+    if (!plans || !plans.length) {
+      $("schedEmpty").hidden = false;
+      return;
+    }
+    $("schedEmpty").hidden = true;
+    plans.forEach(function (p) {
+      var li = document.createElement("li");
+      var name = document.createElement("span");
+      name.className = "fname"; name.textContent = p.name;
+      var time = document.createElement("span");
+      time.className = "fdur"; time.textContent = p.time;
+      var action = document.createElement("span");
+      action.className = "fsz"; action.textContent = p.action;
+      var rm = document.createElement("button");
+      rm.type = "button"; rm.textContent = "Remove";
+      rm.className = "noderem";
+      rm.addEventListener("click", function () {
+        api("/api/schedule/" + p.id, { method: "DELETE" })
+          .then(function (d) {
+            if (d.error) { showError(d.error); return; }
+            STATE.schedules = d.plans || [];
+            renderSchedule(STATE.schedules);
+          }).catch(function (e) { showError(e.message); });
+      });
+      li.appendChild(name);
+      li.appendChild(time);
+      li.appendChild(action);
+      li.appendChild(rm);
+      ul.appendChild(li);
+    });
+  }
+
+  function showAddSchedule() {
+    var name = prompt("Plan name (e.g. 'Morning music')");
+    if (!name || !name.trim()) { return; }
+    var file = prompt("File name in the current library folder (e.g. song.mp3)");
+    if (!file || !file.trim()) { return; }
+    var time = prompt("Time to fire, HH:MM, e.g. 07:30");
+    if (!time || !/^\d{2}:\d{2}$/.test(time)) {
+      showError("Time must be HH:MM, e.g. 07:30"); return;
+    }
+    var action = confirm("Action: Play this file?") ? "play" : "stop";
+    api("/api/schedule", { name: name.trim(), action: action,
+                            file: file.trim(), time: time.trim() })
+      .then(function (d) {
+        if (d.error) { showError(d.error); return; }
+        STATE.schedules = d.plans || [];
+        renderSchedule(STATE.schedules);
+        $("schedInfo").textContent = "Plan added at " + time.trim();
+      }).catch(function (e) { showError("Schedule add failed: " + e.message); });
+  }
   function showTab(name) {
     var panes = document.querySelectorAll(".tabpane");
     for (var i = 0; i < panes.length; i++) {
@@ -476,10 +549,14 @@
       }
     });
     socket.on("connect", function () {
-      $("nodeInfo").textContent = "Connected to server";
+      renderFooter();
     });
     socket.on("disconnect", function () {
-      $("nodeInfo").textContent = "Disconnected";
+      renderFooter();
+    });
+    socket.on("schedule_updated", function (d) {
+      STATE.schedules = (d && d.plans) || [];
+      renderSchedule(STATE.schedules);
     });
   }
 
@@ -489,6 +566,7 @@
     doPlay();
   });
   $("stopBtn").addEventListener("click", doStop);
+  $("pauseBtn").addEventListener("click", doPause);
   $("pickBtn").addEventListener("click", pickFolder);
   $("rescanBtn").addEventListener("click", loadLibrary);
   $("volSlider").addEventListener("input", function () {
@@ -563,11 +641,68 @@
     });
   }
 
+  // ---- settings tab --------------------------------------------------------
+  function settingsFill(s) {
+    STATE.maxVolume = Math.max(0, Math.min(10, parseFloat(s.max_volume) || 1));
+    $("setMaxVol").value = STATE.maxVolume;
+    $("setDefEq").value = s.default_eq_preset || "";
+    $("setLibRoot").value = s.default_library_root || "";
+    $("volSlider").max = STATE.maxVolume;          // clamp the volume slider
+    if (STATE.volume > STATE.maxVolume) {
+      STATE.volume = STATE.maxVolume;
+      $("volSlider").value = STATE.volume;
+    }
+  }
+
+  function settingsLoadUi() {
+    api("/api/settings").then(function (d) {
+      if (!d || d.error) { return; }
+      settingsFill(d.settings || {});
+      // populate the default-EQ dropdown with all known presets
+      var sel = $("setDefEq"), cur = sel.value;
+      api("/api/eq").then(function (e) {
+        if (!e) { return; }
+        sel.innerHTML = '<option value="">(none — last used)</option>';
+        (e.presets || []).forEach(function (p) {
+          var o = document.createElement("option");
+          o.value = p; o.textContent = p;
+          sel.appendChild(o);
+        });
+        sel.value = cur;
+      }).catch(function () { });
+    }).catch(function () { });
+  }
+
+  $("setSaveBtn").addEventListener("click", function () {
+    api("/api/settings", {
+      max_volume: parseFloat($("setMaxVol").value) || 1,
+      default_eq_preset: $("setDefEq").value || "",
+      default_library_root: $("setLibRoot").value.trim() || ""
+    }).then(function (d) {
+      if (d.error) { showError(d.error); return; }
+      settingsFill(d.settings || {});
+      $("setInfo").textContent = "Saved ✓";
+      setTimeout(function () { $("setInfo").textContent = ""; }, 4000);
+      renderFooter();
+    }).catch(function (e) { showError(e.message); });
+  });
+
+  // ---- schedule boot load ---------------------------------------------------
+  function loadSchedules() {
+    api("/api/schedule").then(function (d) {
+      STATE.schedules = (d && d.plans) || [];
+      renderSchedule(STATE.schedules);
+    }).catch(function () { });
+  }
+
   // ---- boot -------------------------------------------------------------
   $("libRoot").value = "";
+  $("schedAddBtn").addEventListener("click", showAddSchedule);
   loadLibrary();
   buildEqUi();
   connectWS();
+  settingsLoadUi();
+  loadSchedules();
   // REST boot fill (footer/node list even before the first WS push).
   api("/api/status").then(function (d) {
     if (!d) { return; }

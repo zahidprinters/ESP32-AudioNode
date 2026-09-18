@@ -22,7 +22,8 @@ import subprocess
 
 from audio_player.config import (cfg, RTP_SRATE, RTP_PORT, EQ_BANDS,
                                  EQ_MIN_DB, EQ_MAX_DB, EQ_BUILTIN_PRESETS,
-                                 eq_save, node_save, ESPRESSIF_OUIS)
+                                 eq_save, node_save, node_load, eq_load,
+                                 settings_load, settings_save, ESPRESSIF_OUIS)
 from audio_player.library import scan_library
 from audio_player.player import Player
 
@@ -35,6 +36,26 @@ def create_app():
 
     app = Flask(__name__, static_folder="static", template_folder="templates")
     socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
+
+    # ---- boot: load persisted user state (nodes, EQ, settings, schedules) ----
+    # Saving worked but nothing ever LOADED these files — restarts lost nodes,
+    # EQ curve, settings and schedule plans. Load them all here, before the
+    # routes are built.
+    node_load()
+    eq_load()
+    settings_load()
+    # A --library CLI argument wins over the saved default library root.
+    if cfg.default_library_root and not getattr(cfg, "library_from_arg", False):
+        cfg.library_root = cfg.default_library_root
+    # Apply the default EQ preset from Settings at boot ("default EQ profile").
+    preset = (EQ_BUILTIN_PRESETS.get(cfg.default_eq_preset)
+              or cfg.eq_user_presets.get(cfg.default_eq_preset))
+    if isinstance(preset, list):            # built-ins are gains-only lists
+        preset = {"preamp_db": 0.0, "gains": preset}
+    if preset:
+        cfg.eq_enabled = True
+        cfg.eq_preamp_db = float(preset.get("preamp_db", 0.0))
+        cfg.eq_gains = list(preset["gains"])
 
     status = {"state": "idle", "src": None, "volume": cfg.default_volume,
               "position_s": 0.0, "position_ms": 0, "nodes": [], "error": None}
@@ -123,7 +144,7 @@ def create_app():
     def api_play():
         data = request.get_json(silent=True) or {}
         path = data.get("path")
-        vol = data.get("volume", cfg.default_volume)
+        vol = min(cfg.max_volume, float(data.get("volume", cfg.default_volume)))
         if not path:
             return jsonify({"error": "path required"}), 400
         try:
@@ -142,7 +163,8 @@ def create_app():
     def api_volume():
         data = request.get_json(silent=True) or {}
         try:
-            player.set_volume(float(data.get("volume", cfg.default_volume)))
+            player.set_volume(min(cfg.max_volume,
+                                  float(data.get("volume", cfg.default_volume))))
         except Exception as e:
             return jsonify({"error": str(e)}), 400
         return jsonify({"ok": True, "volume": player.volume})
@@ -212,6 +234,86 @@ def create_app():
                                      "gains": list(cfg.eq_gains)}
         eq_save()
         return jsonify({"ok": True, "presets": _preset_names()})
+
+    # ---- Pause / resume / user settings -------------------------------------
+    @app.route("/api/pause", methods=["POST"])
+    def api_pause():
+        player.pause()
+        return jsonify({"ok": True})
+
+    @app.route("/api/resume", methods=["POST"])
+    def api_resume():
+        player.resume()
+        return jsonify({"ok": True})
+
+    @app.route("/api/settings", methods=["GET"])
+    def api_settings_get():
+        return jsonify({"ok": True, "settings": {
+            "max_volume": cfg.max_volume,
+            "default_eq_preset": cfg.default_eq_preset,
+            "default_library_root": cfg.default_library_root}})
+
+    @app.route("/api/settings", methods=["POST"])
+    def api_settings_set():
+        data = request.get_json(silent=True) or {}
+        if "max_volume" in data:
+            cfg.max_volume = max(0.0, min(10.0, float(data["max_volume"])))
+        if "default_eq_preset" in data:
+            cfg.default_eq_preset = str(data["default_eq_preset"])
+        if "default_library_root" in data:
+            root = str(data["default_library_root"])
+            cfg.default_library_root = root if root else None
+        settings_save()
+        return api_settings_get()
+
+    # ---- Scheduled play/stop -----------------------------------------------
+    next_id = [0]
+
+    def _plans_from_body(data):
+        """Validate a plan from request body; returns (plan, error_str)."""
+        import re as _re
+        name = str((data or {}).get("name", "")).strip()
+        action = str((data or {}).get("action", "")).strip().lower()
+        file_ = str((data or {}).get("file", "")).strip()
+        time_ = str((data or {}).get("time", "")).strip()
+        if not name:
+            return None, "name required"
+        if action not in ("play", "stop"):
+            return None, "action must be 'play' or 'stop'"
+        if not file_:
+            return None, "file required"
+        if not _re.fullmatch(r"\d{1,2}:\d{2}", time_):
+            return None, "time must be HH:MM (24h), e.g. 07:30"
+        hh, mm = time_.split(":")
+        if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+            return None, "time out of range (00:00 – 23:59)"
+        return {"id": None, "name": name, "action": action,
+                "file": file_, "time": "%02d:%02d" % (int(hh), int(mm))}, None
+
+    @app.route("/api/schedule", methods=["GET"])
+    def api_schedule_get():
+        return jsonify({"plans": cfg.scheduled_plans})
+
+    @app.route("/api/schedule", methods=["POST"])
+    def api_schedule_add():
+        data = request.get_json(silent=True) or {}
+        plan, err = _plans_from_body(data)
+        if err:
+            return jsonify({"error": err}), 400
+        plan["id"] = next_id[0]
+        next_id[0] += 1
+        cfg.scheduled_plans.append(plan)
+        settings_save()
+        return jsonify({"ok": True, "plans": cfg.scheduled_plans})
+
+    @app.route("/api/schedule/<int:pid>", methods=["DELETE"])
+    def api_schedule_remove(pid):
+        kept = [p for p in cfg.scheduled_plans if p["id"] != pid]
+        if len(kept) == len(cfg.scheduled_plans):
+            return jsonify({"error": "no plan with id %d" % pid}), 404
+        cfg.scheduled_plans = kept
+        settings_save()
+        return jsonify({"ok": True, "plans": cfg.scheduled_plans})
 
     # ---- Node management + discovery --------------------------------------
     # The board is a UDP *listener*; there is no board->server packet to sniff,
@@ -367,6 +469,53 @@ def create_app():
 
     threading.Thread(target=background_position_loop, name="pos-loop",
                      daemon=True).start()
+    # Background scheduler: check every second and fire scheduled play/stop at
+    # the right wall-clock time. Plans persist across restarts.
+    def background_schedule_loop():
+        import datetime
+        while True:
+            time.sleep(1)
+            now = datetime.datetime.now()
+            hhmm = now.strftime("%H:%M")
+            fired = False
+            for plan in list(cfg.scheduled_plans):
+                if plan["time"] != hhmm:
+                    continue
+                # Don't double-fire within the same minute (loop runs every 1 s).
+                if plan.get("_last_fire") == hhmm:
+                    continue
+                plan["_last_fire"] = hhmm
+                _log.info("schedule: firing plan %r at %s", plan["name"], hhmm)
+                fired = True
+                try:
+                    if player is None:
+                        _log.warning("schedule: no player yet, skipping %r",
+                                     plan["name"])
+                        continue
+                    if plan["action"] == "stop":
+                        player.stop()
+                    elif plan["action"] == "play":
+                        file_path = os.path.join(cfg.library_root, plan["file"])
+                        if not os.path.isfile(file_path):
+                            _log.warning("schedule: file not found %s",
+                                         file_path)
+                            continue
+                        player.play(file_path,
+                                    volume=min(cfg.max_volume,
+                                               float(cfg.default_volume)))
+                except Exception as e:
+                    _log.warning("schedule: plan %r failed: %s",
+                                 plan["name"], e)
+            if fired:
+                try:
+                    socketio.emit("schedule_updated",
+                                  {"plans": cfg.scheduled_plans},
+                                  namespace="/")
+                except Exception:
+                    pass
+
+    threading.Thread(target=background_schedule_loop, name="schedule-loop",
+                     daemon=True).start()
     return app, socketio, player
 
 
@@ -383,6 +532,7 @@ def main():
 
     if args.library:
         cfg.library_root = args.library
+        cfg.library_from_arg = True      # beats settings.json default root
     if args.node:
         cfg.nodes = []
         for spec in args.node:

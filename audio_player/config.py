@@ -3,6 +3,7 @@
 
 import json
 import os
+import threading
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -103,8 +104,18 @@ class Config:
         self.eq_user_presets = {}
         self.eq_presets_path = str(Path(__file__).resolve().parent /
                                    "eq_presets.json")
-        # Node list persistence (discovered/added nodes survive restarts).
+                # Node list persistence (discovered/added nodes survive restarts).
         self.nodes_path = str(Path(__file__).resolve().parent / "nodes.json")
+        # Settings: max volume ceiling, default EQ preset, default library root.
+        # Persisted to settings.json (gitignored user state).
+        self.settings_path = str(Path(__file__).resolve().parent / "settings.json")
+        self.max_volume = 1.0
+        self.default_eq_preset = "Mid Cut (speaker)"
+        self.default_library_root = None
+        # Scheduled play/stop plans: each plan = {"id": int, "time": "HH:MM",
+        # "action": "play"|"stop", "file": "filepath (relative to library_root)"}.
+        # Persisted inside settings.json; survives restarts.
+        self.scheduled_plans = []
         # Player: headroom for the pump's internal buffer (a few frames).
         self.pcm_buffer_bytes = RTP_BYTES_PER_FRAME * 8
 
@@ -187,3 +198,39 @@ def eq_load(path=None):
 
 
 eq_load()
+
+
+def settings_save():
+    """Persist user settings (max_volume, default_eq_preset, default_library_root,
+    scheduled_plans)."""
+    data = {"max_volume": cfg.max_volume,
+            "default_eq_preset": cfg.default_eq_preset,
+            "default_library_root": cfg.default_library_root,
+            "scheduled_plans": cfg.scheduled_plans}
+    tmp = cfg.settings_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1)
+    os.replace(tmp, cfg.settings_path)
+
+
+def settings_load():
+    """Load user settings. Missing/corrupt = keep defaults."""
+    try:
+        with open(cfg.settings_path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return
+    if "max_volume" in d:
+        cfg.max_volume = max(0.0, min(10.0, float(d["max_volume"])))
+    if "default_eq_preset" in d:
+        cfg.default_eq_preset = str(d["default_eq_preset"])
+    if "default_library_root" in d:
+        cfg.default_library_root = str(d["default_library_root"]) \
+            if d["default_library_root"] else None
+    if "scheduled_plans" in d:
+        plans = d["scheduled_plans"]
+        if isinstance(plans, list):
+            cfg.scheduled_plans = plans
+
+
+settings_load()

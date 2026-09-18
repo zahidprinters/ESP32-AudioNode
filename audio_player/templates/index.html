@@ -43,6 +43,8 @@
   <nav class="tabs" role="tablist">
     <button type="button" class="tab active" data-tab="player">Player</button>
     <button type="button" class="tab" data-tab="eq">Equalizer</button>
+    <button type="button" class="tab" data-tab="schedule">Schedule</button>
+    <button type="button" class="tab" data-tab="settings">Settings</button>
     <button type="button" class="tab" data-tab="nodes">Nodes</button>
   </nav>
 
@@ -53,6 +55,7 @@
     </div>
     <div class="transport">
       <button id="playBtn" type="button" class="play">Play</button>
+      <button id="pauseBtn" type="button" hidden>Pause</button>
       <button id="stopBtn" type="button">Stop</button>
       <div class="row">
         <label for="libRoot">Library folder:</label>
@@ -89,6 +92,42 @@
     <p class="muted eq-hint">VLC band centers. Changes apply live (a tiny tick while
       playing is the pipeline restarting at the same spot). Presets save to
       eq_presets.json.</p>
+  </section>
+
+  <!-- Schedule tab -->
+  <section class="panel tabpane" id="tab-schedule" hidden>
+    <div class="row">
+      <button id="schedAddBtn" type="button">Add plan</button>
+      <span id="schedInfo" class="muted"></span>
+    </div>
+    <p id="schedEmpty" class="muted">No scheduled plans yet.</p>
+    <ul id="schedList" class="filelist"></ul>
+  </section>
+
+  <!-- Settings tab -->
+  <section class="panel tabpane" id="tab-settings" hidden>
+    <div class="row">
+      <label for="setMaxVol">Max allowed volume:</label>
+      <input id="setMaxVol" type="number" min="0" max="10" step="0.1" value="1.0">
+      <span class="muted">(0.0 – 10.0)</span>
+    </div>
+    <div class="row">
+      <label for="setDefEq">Default EQ preset:</label>
+      <select id="setDefEq">
+        <option value="">(none — last used)</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="setLibRoot">Default library folder:</label>
+      <input id="setLibRoot" type="text"
+             placeholder="e.g. D:\Music (used at startup)">
+    </div>
+    <div class="row">
+      <button id="setSaveBtn" type="button">Save settings</button>
+      <span id="setInfo" class="muted"></span>
+    </div>
+    <p class="muted">Max volume clamps the volume slider; default EQ preset and
+      library folder are applied at startup.</p>
   </section>
 
   <!-- Nodes tab -->

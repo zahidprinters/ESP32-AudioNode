@@ -22,6 +22,7 @@ audio_player/media/
 # EQ presets and the node list are per-user (created by the app at runtime).
 audio_player/eq_presets.json
 audio_player/nodes.json
+audio_player/settings.json
 
 # --- scratch ---------------------------------------------------------------
 # tmp/ is disposable: experiments, dumps, throwaway scripts.

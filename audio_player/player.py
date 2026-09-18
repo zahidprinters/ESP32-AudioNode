@@ -55,6 +55,7 @@ class Player:
         self._stop_ev = threading.Event()
         self._kill_ev = threading.Event()
         self._lock = threading.Lock()
+        self._paused = False
 
     @property
     def running(self):
@@ -79,6 +80,10 @@ class Player:
         return self._base_samples + int(self._bytes_sent / 2)
 
     def play(self, source_path: str, volume: float = None):
+        # If currently paused on the same source, resume instead of restarting.
+        if self._paused and self._src and os.path.abspath(str(source_path)) == self._src:
+            self.resume()
+            return
         if self._running:
             self.stop()
         path = str(source_path)
@@ -102,6 +107,24 @@ class Player:
                         volume=self._volume)
 
     def stop(self):
+        if not self._running and not self._paused:
+            return
+        self._kill_ev.set()
+        self._stop_ev.set()
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=5.0)
+        self._kill_pipeline()
+        self._running = False
+        self._paused = False
+        self._seq = 0
+        self._ts = 0
+        self._bytes_sent = 0
+        self._base_samples = 0
+        self._status_cb(state="stopped")
+
+    def pause(self):
+        """Pause streaming: kill the pipeline but keep position. Resume plays
+        from the same spot — _base_samples is preserved."""
         if not self._running:
             return
         self._kill_ev.set()
@@ -110,11 +133,22 @@ class Player:
             self._thread.join(timeout=5.0)
         self._kill_pipeline()
         self._running = False
-        self._seq = 0
-        self._ts = 0
-        self._bytes_sent = 0
-        self._base_samples = 0
-        self._status_cb(state="stopped")
+        self._paused = True
+        self._status_cb(state="paused")
+
+    def resume(self):
+        """Resume from a paused state at the current position."""
+        if not self._paused or not self._src:
+            return
+        self._running = True
+        self._paused = False
+        self._stop_ev.clear()
+        self._kill_ev.clear()
+        pos_sec = self.sample_position / RTP_SRATE
+        self._start_pipeline_at(self._src, self._volume, pos_sec)
+        self._status_cb(state="playing", src=os.path.basename(self._src),
+                        src_path=os.path.abspath(self._src),
+                        volume=self._volume)
 
     def set_volume(self, volume: float):
         vol = max(0.0, min(10.0, float(volume)))
