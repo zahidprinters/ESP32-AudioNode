@@ -161,7 +161,11 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        printf("wifi disconnected, retrying...\n");
+        /* Log the reason — "disconnected" alone is undiagnosable.
+           Common codes: 15/202 = handshake/auth fail (often wrong password),
+           201 = no AP found, 8 = AP kicked us off. */
+        wifi_event_sta_disconnected_t *d = (wifi_event_sta_disconnected_t *)data;
+        printf("WIFI DISCONNECTED: reason=%d, retrying...\n", d->reason);
         net_state = 0;
         if (ap_active) return;          /* don't fight AP mode */
         esp_wifi_connect();
@@ -170,6 +174,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         printf("GOT IP: " IPSTR "\n", IP2STR(&evt->ip_info.ip));
         net_state = 1;                  /* waiting for server */
         xEventGroupSetBits(wifi_events, WIFI_CONNECTED_BIT);
+    } else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
+        /* IP dropped silently (e.g. lease lost / router reassigned it) */
+        printf("IP_EVENT_STA_LOST_IP\n");
+        net_state = 0;
     }
 }
 
@@ -252,11 +260,13 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     static char *keys[] = { "ssid", "password", "server_ip", "server_port", NULL };
     char vals[4][64] = {{0}};
 
-    /* Read request body (form-encoded), bounded. */
+    /* Read request body (form-encoded), bounded. Reserve one byte for the
+       terminator: with `off < sizeof(body)` a full 1024-byte body left
+       off == 1024 and `body[off] = '\0'` wrote one byte past the array. */
     char body[1024];
     int off = 0;
-    while (off < (int)sizeof(body)) {
-        int n = httpd_req_recv(req, body + off, 1);
+    while (off < (int)sizeof(body) - 1) {
+        int n = httpd_req_recv(req, body + off, sizeof(body) - 1 - off);
         if (n <= 0) break;
         off += n;
     }
@@ -586,10 +596,11 @@ static void udp_task(void *arg)
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    if (bind(sock, (struct sockaddr *)&local, sizeof(local)) < 0) {
-        printf("udp: bind failed (errno=%d)\n", errno);
-        close(sock);
-        return;
+    /* bind() on INADDR_ANY:1234 succeeds without an IP, but if it ever fails
+       a silent `return` leaves UDP dead forever with no listener. Retry. */
+    while (bind(sock, (struct sockaddr *)&local, sizeof(local)) < 0) {
+        printf("udp: bind failed (errno=%d), retrying...\n", errno);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     printf("udp: listening on 0.0.0.0:%d, waiting for RTP L16 (PT=%d)...\n",
@@ -720,6 +731,7 @@ void app_main(void)
     wifi_events = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, &wifi_event_handler, NULL));
 
     /* Load config; none in NVS (first boot / factory reset) -> zeroed cfg ->
        ssid empty -> setup AP (documented spec: first boot runs AudioNode-Setup) */

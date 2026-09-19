@@ -26,6 +26,8 @@
 - **Publication prep done (2026-09-17)**: root `README.md`, `pyproject.toml`, `requirements.txt`, `audio_player/__init__.py`, `.gitattributes` added; scratch/build dirs and the unused `static/js/help.js` deleted; SSID + dev LAN IPs replaced with placeholders and **Git history rewritten then verified clean** (no Wi-Fi password, no SSID in any reachable commit — all hashes changed). Checks green: `selftest` all-pass, `compileall` exit 0, wheel builds as `esp32_audio_node-0.1.0`. **Committed as `df44f41`** (on top of `f1036e3`); working tree clean, **44 tracked files**, no media / `nodes.json` / `eq_presets.json` / raw logs tracked, 0 password + 0 SSID hits across *all* commits. `git remote` = none — local only, waiting on the repo URL to push
 - **Repo identity for publication**: name **ESP32 AudioNode** (`esp32-audio-node` in packaging) — "A Wi-Fi audio streaming system with ESP32-S3 speaker firmware and a browser-based Python player, featuring RTP/UDP streaming, node management, and a 10-band equalizer."
 - **Open publication items**: (1) no license selected — do not advertise open source until chosen; (2) private dev LAN addresses remain in historical `docs/` + `logs/`; (3) rotate the Wi-Fi password since it was shared in plain text during development
+- **Firmware robustness hardening (2026-09-19)**: four review-found issues fixed in `main.c`, **VERIFIED on hardware** — (1) the captive-portal `POST /save` body read wrote `body[1024] = '\0'` one byte past `char body[1024]` when a full 1024-byte body arrived (now bounded at `sizeof(body) - 1`, chunked `httpd_req_recv` instead of 1 byte/call); (2) `WIFI DISCONNECTED: reason=%d` — the disconnect reason code is no longer discarded; (3) `IP_EVENT_STA_LOST_IP` registered + handled (`net_state = 0`); (4) `udp_task` `bind()` failure retries every 1 s instead of `close()+return` (a single bind failure used to kill UDP silently for the whole boot). Build 0 errors (`audio_node.bin` 0xdc140), flash `Hash of data verified`, boot → `udp: listening on 0.0.0.0:1234` + `GOT IP <board-ip>`, 12 s tone → `pkts=327 dropped=0 pcm=627840` (327 × 1920 byte-exact) at 50.0 fps. Log: `logs/2026-09-19_bugfix-hardening.md`
+- **Not a fault (2026-09-19)**: a reported "board is not getting an IP" did **not reproduce** — the pre-change boot log shows `wifi:connected ... rssi: -42` → `GOT IP: <board-ip>` and `udp: listening on 0.0.0.0:1234` succeeding on the first `bind()` attempt. The node was silent because **no sender was running**, not because of Wi-Fi or the socket.
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
 ## 2. FEATURE MAP (what exists / what's left)
@@ -48,6 +50,7 @@
 | **P9: Multi-node unicast** | 🚧 PARTIAL | `audio_player/` | `player._send_frame` already loops over `cfg.nodes`, and the app takes repeatable `--node IP:PORT`; needs an on-hardware 2-board test |
 | **P10: Audio gain chain (amp quirk)** | ✅ DONE | `main/main.c` + sender | ×2 digital gain on board (SD pin=VDD → 3 dB amp min → +6 dB); sender headroom — unchanged |
 | **P11: 10-band EQ + presets (server-side)** | 🟡 code-complete, awaiting user ears | `audio_player/config.py`, `player.py`, `app.py`, `static/` | VLC 10-band grid + preamp; live apply via restart-at-position; alimiter stays LAST (never clip); 10 built-in presets + user presets in `eq_presets.json` (git-ignored) |
+| **P12: firmware robustness (guards + diagnostics)** | ✅ VERIFIED 2026-09-19 | `main/main.c` | Portal POST body read bounded (`sizeof(body) - 1`, chunked recv — was a 1-byte overflow), `WIFI DISCONNECTED: reason=%d`, `IP_EVENT_STA_LOST_IP` handled, `udp_task` `bind()` retries instead of dying. Log: `logs/2026-09-19_bugfix-hardening.md` |
 
 ## 3. VERIFIED WORKING ✅ (do not break)
 **TCP prototype milestones — archived, audio pipeline reused in RTP build:**
@@ -76,6 +79,13 @@
 - seek to 100 s → 101.36 s reported (absolute); volume 0.5→0.8 → position continued ~102.5 s (no restart at 0); stop → `stopped`, position 0
 - `python -m audio_player.selftest` → **29/29 pass**, including the pacing regression test (50 frames/s measured on the wire)
 - Firmware still builds from the restructured path: `cd firmware; idf.py build` → `Project build complete`, 0 errors, `audio_node.bin` 901,232 B
+
+**Firmware robustness fixes — verified on hardware 2026-09-19 (log: `logs/2026-09-19_bugfix-hardening.md`):**
+- Captive-portal `POST /save` body read is bounded correctly: the loop stops at `sizeof(body) - 1` and `httpd_req_recv` fills the remaining room (was 1 byte/call). The terminator can no longer be written past the array. Static check `python tmp\verify_fixes.py` → **15/15**, incl. a simulation of the worst case (new bound stops at off=1023; the old bound reached off=1024 = the overflow)
+- `WIFI DISCONNECTED: reason=%d` — the reason code is logged (15/202 = handshake/auth fail, 201 = no AP found, 8 = AP kicked us off)
+- `IP_EVENT_STA_LOST_IP` registered and handled → a silently dropped IP clears `net_state` instead of leaving it stuck at "connected"
+- `udp_task` `bind()` failure retries every 1 s instead of returning → no permanently-dead UDP listener
+- Hardware: build `audio_node.bin` 0xdc140 (901,440 B, +208 B for the new logging), 0 errors; flash `Hash of data verified`; boot `udp: listening on 0.0.0.0:1234` (no retry line → bind still first-try, no regression) + `GOT IP <board-ip>`; 12 s RTP tone `pkts=327 dropped=0 pcm=627840` byte-exact at 50.0 fps; no `WIFI DISCONNECTED` / `LOST_IP` / panic / abort
 
 ## 4. TRIED & FAILED ❌ (NEVER re-try these; check before any fix attempt)
 - ❌ **(2026-09-13) UDP datagrams 1932 B with `CONFIG_LWIP_IP4_REASSEMBLY` disabled** — every RTP frame (1932 B > 1500 MTU) arrives IP-fragmented and lwIP silently drops it: recvfrom blocks forever, ping still works, reverse path (board→PC 2 B probe) works. Root cause of "RTP receiver never fires". FIX: `CONFIG_LWIP_IP4_REASSEMBLY=y` in sdkconfig.defaults. With default `IP_REASS_MAX_PBUFS=10` there was still ~5% seq-drop; 20 → dropped=0.
@@ -116,6 +126,9 @@
 | 18 | 2026-09-15 | `idf_monitor` attaches to COM5 but prints nothing while a stream is running | 6 orphaned `idf_monitor`/`esp_idf_monitor` python processes from earlier sessions held COM5; `Stop-Job` kills the wrapper pwsh, not the python grandchild | Kill by PID: `Get-CimInstance Win32_Process -Filter "Name='python.exe'" | Where ... | Stop-Process -Force` | ✅ serial log readable again |
 | 19 | 2026-09-15 | Build log restarted mid-build (`[176/979]` → `[1/1088]`), twice | `Start-Job` a long build, then keep issuing shell commands — the tool closes the previous terminal per command, killing the job's process tree | Run long builds as the only command, or launch detached (`Start-Process pwsh -File tmp\build_fw.ps1 -WindowStyle Hidden`) | ✅ `Project build complete` |
 
+| 20 | 2026-09-19 | (latent — found by code review, never hit on hardware) `char body[1024]` read with `while (off < (int)sizeof(body))` then `body[off] = '\0'` → 1-byte write past the array when a full 1024-byte body arrives | `portal_save_handler` read the POST body 1 byte at a time up to `sizeof(body)`, so `off` could reach 1024 and `body[1024] = '\0'` was undefined behaviour. The HTML form posts ~90 B, so the portal itself never triggered it — but any hand-crafted POST of ≥1024 B would | Loop bound `sizeof(body) - 1` and recv `sizeof(body) - 1 - off` per call (also removes the 1-byte-per-syscall inefficiency) | ✅ fixed + verified on hardware (build/flash/boot/12 s tone all clean); `tmp\verify_fixes.py` 15/15 |
+| 21 | 2026-09-19 | Reported symptom: "board is not getting an IP" (the reason bug 2 was raised) | Investigated before changing code: the pre-change boot log shows the opposite — `wifi:connected with <ssid>, rssi: -42` → `esp_netif_handlers: sta ip: <board-ip>` → `GOT IP: <board-ip>`, and `udp: listening on 0.0.0.0:1234` printed on the first `bind()` attempt. A 12 s tone to the board gave `pkts=502 dropped=0 pcm=963840` byte-exact | No fault to fix — the node was idle because no sender was running. Added the diagnostic logging anyway (reasons 2/3/4 above) so a real Wi-Fi failure would be visible next time | ✅ not reproduced; diagnostics added |
+
 ## 6. DECISIONS & REASONS
 
 | Decision | Reason |
@@ -124,7 +137,7 @@
 | RTP timestamp in samples (not ms) | At 48 kHz, +960 per 20 ms frame. Unambiguous seq/ts correlation; easy gap detection. |
 | Silence-fill on packet loss | UDP is unreliable; never block I2S waiting for a lost packet. Silence one frame is better than glitch/buzz/replay. |
 | Validate every UDP datagram | Version=2, PT=96, length, source IP whitelist, seq/ts sanity. A single bad packet corrupts all following audio (the "noisy sound" bug). |
-| Explicit I2S byte-order conversion | Don't blitcopy network bytes to I2S — convert to the peripheral's expected format. |
+| I2S byte order | RTP L16 payload is LE 16-bit PCM; ESP32-S3 is LE; I2S driver reads native int16_t and serializes MSB-first in PHILIPS mode. Blitcopy is correct — no byte swap needed. Document any future format change here. |
 | Board is UDP listener (not sender) | Server is behind firewall with port rules; server initiates to known board IP. Simpler for many-to-one. |
 | No MCLK | MAX98357A derives its own clock |
 | Setup AP = open (no password) | Simpler for first-time setup; the web form handles the real auth. AP is short-lived and local. |
@@ -178,10 +191,11 @@
 6. ✅ Failover→AP path — VERIFIED 2026-09-14 (bad SSID → 30 s → AP reopened by itself, NVS kept, portal recovery)
 7. ✅ P5 LED state fix — VERIFIED 2026-09-14 (blue breathing ↔ VU ↔ blue, no more stuck red)
 8. ✅ Repo restructure + `audio_player` V1 — VERIFIED 2026-09-15 (`firmware/` builds clean; app streams 50.0 pkts/s with `dropped=0`, position 1:1). Log: `logs/2026-09-15_app-v1-live.md`
-9. 🔲 **Listen + tune EQ** — play the MP3 from the UI, pick/tune a preset (250 Hz–1 kHz distorts first on this speaker; sliders + Save… in the EQ panel), then commit the EQ + retuned-chain milestone
-10. 🔲 P9: multi-node unicast on hardware (2 boards, one stream; the app already loops over `cfg.nodes`)
-11. 🔲 V2 candidates: node back-channel (board → server status packet), MP3/AAC RTP depacketizer on the board, playlist/next-track, `threading` async mode to drop the eventlet deprecation
-12. 🔲 Commit each verified milestone only
+9. ✅ Firmware robustness fixes (4 reported bugs) — VERIFIED on HW 2026-09-19 (build 0 errors, flash `Hash of data verified`, boot `udp: listening on 0.0.0.0:1234` + `GOT IP`, 12 s tone `pkts=327 dropped=0 pcm=627840` byte-exact at 50.0 fps; `python tmp\verify_fixes.py` 15/15). Log: `logs/2026-09-19_bugfix-hardening.md`
+10. 🔲 **Listen + tune EQ** — play the MP3 from the UI, pick/tune a preset (250 Hz–1 kHz distorts first on this speaker; sliders + Save… in the EQ panel), then commit the EQ + retuned-chain milestone
+11. 🔲 P9: multi-node unicast on hardware (2 boards, one stream; the app already loops over `cfg.nodes`)
+12. 🔲 V2 candidates: node back-channel (board → server status packet), MP3/AAC RTP depacketizer on the board, playlist/next-track, `threading` async mode to drop the eventlet deprecation
+13. 🔲 Commit each verified milestone only
 
 ## 12. DEV TOOLING (2026-09-11, non-firmware)
 - Cline global tooling installed (details: `logs/2026-09-11_cline-global-tooling.md`): ponytail rule
