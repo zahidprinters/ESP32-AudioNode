@@ -135,11 +135,11 @@ I2S DMA
 - The audio/I2S task is never blocked waiting for a missing UDP packet. It keeps pulling from the ring; if the ring empties, it plays zeros and continues.
 - This avoids the "buzz/noise" that came from replaying stale buffer contents on drop (the TCP-drop bug).
 
-## I2S byte order — explicit conversion
+## I2S byte order — le→c native
 
-RTP L16 payload is little-endian 16-bit PCM. The ESP32 S3 I2S peripheral may expect a particular byte order depending on configuration.
+RTP L16 payload is little-endian 16-bit PCM (this project's chosen wire format; the sender emits LE samples via `struct.pack("<h")`). The ESP32-S3 is also little-endian, and the I2S driver (`I2S_STD_PHILIPS_SLOT` with `I2S_DATA_BIT_WIDTH_16BIT`) reads native `int16_t` values and serializes each sample MSB-first on BCLK. So the LE RTP payload can be blitcopied directly into the I2S write buffer as `int16_t` — no byte swap is needed on this platform.
 
-The receiver explicitly converts the validated RTP PCM payload into the I2S buffer format rather than blitcopying network bytes. The sender emits little-endian samples (native to the host). If the sender format changes, the receiver conversion is the single place to change.
+The receiver writes the validated RTP PCM payload straight into the ring buffer as `int16_t`, then the audio pump duplicates each sample into L+R stereo slots for the I2S driver. If the sender format ever changes (e.g. to big-endian RTP L16), the receiver is the single place to add a conversion.
 
 ## WiFi / network modes
 

@@ -7,6 +7,29 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### Audit register + roadmap (2026-09-19)
+- **`docs/AUDIT.md` added** — living register of external code reviews. Every reported item
+  is re-verified against the actual source before it gets a verdict (`✅ done` / `🔲 valid` /
+  `⚠️ not a defect` / `❌ rejected or deferred`), with the evidence recorded in an appendix.
+- **Round 1 — 32-item firmware review triaged**: 5 already satisfied (including the three
+  fixed in the same-day P12 commit), **19 valid**, **5 inaccurate claims**, 3 rejected or
+  deferred. The 19 valid items are grouped into six phases with an explicit hardware gate
+  each: **A** diagnostics, **B** portal input handling, **C** NVS config versioning,
+  **D** stream/timer/handle hygiene, **E** boot & amp hygiene, **F** polish (only against a
+  measurement). Phase C is a prerequisite for the `server_port` decision in Phase B.
+- **The review's claimed root cause did not hold**: its four "explains your no-IP symptom"
+  items were checked on hardware and the node was healthy — `<ssid>` joined,
+  `GOT IP: <board-ip>`, first-attempt `bind()`. The node was silent because no sender was
+  running. The diagnostics were still adopted, so a *future* failure is not silent.
+- **`docs/GUIDELINES.md` de-duplicated** — a previous patch had appended an evolved copy of
+  the guideline sections, so sections 7–101 repeated at 188–290 with the unique
+  "Repository layout" / "Audio Player App" content wedged between them (a one-line edit
+  therefore showed as two identical hunks). Rebuilt losslessly: **290 → 196 lines, 12 unique
+  headings**, 6 declared supersessions, zero unexpected line drops.
+- **Dead code removed** — `audio_player/config.py` defined `sched_save()` / `sched_load()`
+  (added by a previous session's patch script) that nothing imported; schedules are
+  persisted through `settings_save()`.
+
 ### Repository / publication preparation (2026-09-17)
 - **Root `README.md`** added (project overview, PC-app quick start, node connection
   steps, hardware table, checks, security notes); the old root-level overview became

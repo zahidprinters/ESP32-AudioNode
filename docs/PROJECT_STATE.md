@@ -28,6 +28,7 @@
 - **Open publication items**: (1) no license selected — do not advertise open source until chosen; (2) private dev LAN addresses remain in historical `docs/` + `logs/`; (3) rotate the Wi-Fi password since it was shared in plain text during development
 - **Firmware robustness hardening (2026-09-19)**: four review-found issues fixed in `main.c`, **VERIFIED on hardware** — (1) the captive-portal `POST /save` body read wrote `body[1024] = '\0'` one byte past `char body[1024]` when a full 1024-byte body arrived (now bounded at `sizeof(body) - 1`, chunked `httpd_req_recv` instead of 1 byte/call); (2) `WIFI DISCONNECTED: reason=%d` — the disconnect reason code is no longer discarded; (3) `IP_EVENT_STA_LOST_IP` registered + handled (`net_state = 0`); (4) `udp_task` `bind()` failure retries every 1 s instead of `close()+return` (a single bind failure used to kill UDP silently for the whole boot). Build 0 errors (`audio_node.bin` 0xdc140), flash `Hash of data verified`, boot → `udp: listening on 0.0.0.0:1234` + `GOT IP <board-ip>`, 12 s tone → `pkts=327 dropped=0 pcm=627840` (327 × 1920 byte-exact) at 50.0 fps. Log: `logs/2026-09-19_bugfix-hardening.md`
 - **Not a fault (2026-09-19)**: a reported "board is not getting an IP" did **not reproduce** — the pre-change boot log shows `wifi:connected ... rssi: -42` → `GOT IP: <board-ip>` and `udp: listening on 0.0.0.0:1234` succeeding on the first `bind()` attempt. The node was silent because **no sender was running**, not because of Wi-Fi or the socket.
+- **Audit register opened + housekeeping (2026-09-19)**: `docs/AUDIT.md` records external code reviews, **every item re-verified against the source before a verdict** (a review is a hypothesis; code + hardware are the evidence). Round 1 triaged a 32-item review: 5 already satisfied, 19 valid and phased A–F with per-phase hardware gates, 5 claims demonstrably inaccurate, 3 rejected/deferred — each with evidence in the appendix. Phase A (close the diagnostic gaps: `esp_wifi_connect` rc, AP join/leave, UDP idle heartbeat, `socket()` retry) is the next firmware work; Phases B–F follow, and Phase C **must** land before any change to `node_cfg_t`. Same pass found and fixed two defects: `docs/GUIDELINES.md` was duplicated (a patch had appended an evolved copy of sections 7–101 — rebuilt losslessly 290 → 196 lines, 12 unique headings, 6 declared supersessions) and `audio_player/config.py` carried dead `sched_save()`/`sched_load()` helpers that nothing imported (removed)
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
 ## 2. FEATURE MAP (what exists / what's left)
@@ -51,6 +52,7 @@
 | **P10: Audio gain chain (amp quirk)** | ✅ DONE | `main/main.c` + sender | ×2 digital gain on board (SD pin=VDD → 3 dB amp min → +6 dB); sender headroom — unchanged |
 | **P11: 10-band EQ + presets (server-side)** | 🟡 code-complete, awaiting user ears | `audio_player/config.py`, `player.py`, `app.py`, `static/` | VLC 10-band grid + preamp; live apply via restart-at-position; alimiter stays LAST (never clip); 10 built-in presets + user presets in `eq_presets.json` (git-ignored) |
 | **P12: firmware robustness (guards + diagnostics)** | ✅ VERIFIED 2026-09-19 | `main/main.c` | Portal POST body read bounded (`sizeof(body) - 1`, chunked recv — was a 1-byte overflow), `WIFI DISCONNECTED: reason=%d`, `IP_EVENT_STA_LOST_IP` handled, `udp_task` `bind()` retries instead of dying. Log: `logs/2026-09-19_bugfix-hardening.md` |
+| **P13: audit register + phase plan** | ✅ OPEN 2026-09-19 | `docs/AUDIT.md` | Register for external code reviews, every item re-verified against the source. Round 1 (32-item review): 5 already satisfied (incl. #1–#3 = P12), 19 valid phased A–F, 5 claims inaccurate, 3 rejected/deferred — each with recorded evidence. **Phase A (diagnostics) is the next firmware work** |
 
 ## 3. VERIFIED WORKING ✅ (do not break)
 **TCP prototype milestones — archived, audio pipeline reused in RTP build:**
@@ -175,6 +177,8 @@
 - Toolchain: **IDF v6.1 at `D:\esp32\v6.1\esp-idf`**, tools at `C:\Espressif\tools` (switched from old D:\esp32-tools v5.3.2 install).
 
 ## 10. FILE HYGIENE
+- **Audit register**: `docs/AUDIT.md` — external review triage + the phased roadmap (A–F). Update it whenever a review is received or an item changes state; keep the evidence appendix honest.
+- **`docs/GUIDELINES.md` was duplicated until 2026-09-19** (a patch appended an evolved copy of sections 7–101). Before editing any long doc, scan its headings for duplicates (`Select-String -Path <file> -Pattern '^## '`) — a doubled section makes a one-line edit look like two independent hunks.
 - **Repository layout (since 2026-09-15)**: `firmware/` = ESP32 code · `audio_player/` = PC app + CLI sender + selftest · `docs/` = all markdown · `logs/` = session evidence · `tmp/` = scratch (git-ignored). Nothing experimental may sit in `firmware/` or `audio_player/`.
 - One canonical file per purpose — never duplicate scripts/tests under new names (send_pcm.py stays send_pcm.py; the app's sender is `player.py`).
 - Experiments/scratch → `tmp/` (git-ignored, periodically deleted). Never in the code tree.
@@ -196,6 +200,14 @@
 11. 🔲 P9: multi-node unicast on hardware (2 boards, one stream; the app already loops over `cfg.nodes`)
 12. 🔲 V2 candidates: node back-channel (board → server status packet), MP3/AAC RTP depacketizer on the board, playlist/next-track, `threading` async mode to drop the eventlet deprecation
 13. 🔲 Commit each verified milestone only
+
+**Audit backlog (from `docs/AUDIT.md` — 19 valid items, phased):** next firmware work is
+**Phase A** (diagnostics: `esp_wifi_connect` rc, AP join/leave, UDP idle heartbeat,
+`socket()` retry), then **B** (portal: IP validation, HTTP 400 on bad input, `strlen`
+hoist, `const html`, idiomatic `strtok_r`, **`server_port` decision**), then **C** (NVS
+config version — must precede B's `node_cfg_t` change), **D** (silence-fill cap, `tone_ms`,
+failover timer, `httpd_stop`, `int64_t` ms), **E** (amp enable after `i2s_init`,
+`esp_wifi_stop` before NVS erase), **F** (polish, only against a measurement).
 
 ## 12. DEV TOOLING (2026-09-11, non-firmware)
 - Cline global tooling installed (details: `logs/2026-09-11_cline-global-tooling.md`): ponytail rule

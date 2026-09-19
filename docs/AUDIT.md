@@ -1,0 +1,219 @@
+# AUDIT REGISTER — firmware review triage & phase plan
+
+Living register of external code reviews. **Every item is re-verified against the actual
+source before it gets a verdict** — a review is a hypothesis, the code and the hardware
+are the evidence. Verdicts and evidence are dated; re-triaged items keep their history.
+
+Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/main.c`, 745 lines).
+
+## Verdict legend
+
+| Mark | Meaning |
+|---|---|
+| ✅ done | Already fixed in the referenced commit, or the code already behaves as requested |
+| 🔲 valid | Genuinely worth changing — scheduled in a phase below |
+| ⚠️ not a defect | The claim is inaccurate or the risk is already handled; no change (reason recorded) |
+| ❌ rejected / deferred | Not worth doing as asked, or requires evidence first (reason recorded) |
+
+---
+
+## Round 1 — 32-item firmware review (2026-09-19)
+
+| # | Item | Verdict | Phase |
+|---|---|---|---|
+| 1 | Buffer overflow: `body[1024]` written past the array | ✅ Fixed — `6844401` | — |
+| 2 | Disconnect reason code discarded | ✅ Fixed — `6844401` | — |
+| 3 | `IP_EVENT_STA_LOST_IP` never registered | ✅ Fixed — `6844401` | — |
+| 4 | `udp_task` bind failure exits silently | ✅ `bind()` retry added; 🔲 `socket()` path still returns | A |
+| 5 | `esp_wifi_connect()` return ignored in `STA_START` | 🔲 valid | A |
+| 6 | `failover_task` timer not reset while `ap_active` | 🔲 valid (latent — see E-2) | D |
+| 7 | `udp_task` launched before Wi-Fi is up | ⚠️ not a defect — proven on hardware | — |
+| 8 | `volatile` flags not atomic | 🔲 valid (documentation-level) | F |
+| 9 | `ring_used()` called outside the mutex → stale `avail` | ⚠️ inaccurate — the mutex **is** held | — |
+| 10 | `tone_ms` is `static` in the pump | 🔲 valid (low) | D |
+| 11 | `strtok_r` non-idiomatic (`tok = save`) | 🔲 valid (cosmetic) | B |
+| 12 | NVS config struct has no version field | 🔲 valid | C |
+| 13 | `cfg_load` does not check the returned blob length | 🔲 valid | C |
+| 14 | `url_decode` calls `strlen` inside the loop (O(n²)) | 🔲 valid | B |
+| 15 | `server_ip` not validated at save | 🔲 valid | B |
+| 16 | `server_port` stored but unused / not independent of IP | 🔲 valid — **decision needed** | B |
+| 17 | Silence fill not capped by free ring space | 🔲 valid (mechanism differs — see E-4) | D |
+| 18 | `last_pkt_ms` is `uint32_t` ms | 🔲 valid (low — see E-5) | D |
+| 19 | HTTP body read 1 byte at a time | ✅ Fixed — `6844401` | — |
+| 20 | Ring mutex held during `memcpy` → use a lock-free ring | ❌ deferred — needs a measurement first | F |
+| 21 | `audio_pump_task` calls `ring_used()` with a mutex drop | ⚠️ inaccurate — same as #9 | — |
+| 22 | No SSID logged at connect time | ✅ already present (`STA: joining %s`) | — |
+| 23 | No log when a client joins/leaves the setup AP | 🔲 valid | A |
+| 24 | `rssi_task` noisy in AP mode | ⚠️ inaccurate — it already prints nothing | — |
+| 25 | `%lu` for `uint32_t` in the UDP stats log | ❌ not a bug — the cast is explicit | — |
+| 26 | No socket timeout / heartbeat on `udp_task` | 🔲 valid | A |
+| 27 | `char *html` pointing at a string literal | 🔲 valid (trivial) | B |
+| 28 | `setup_ap_start` leaks the `httpd_handle_t` | 🔲 valid (latent) | D |
+| 29 | `nvs_flash_erase()` while Wi-Fi is running | 🔲 valid | E |
+| 30 | `gain_clip` multiply can overflow `int32_t` | ❌ not reachable from any caller | — |
+| 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
+| 32 | `PIN_SD` driven HIGH before `i2s_init()` | 🔲 valid (low) | E |
+
+**Tally: 32 items → 5 already satisfied · 19 valid · 5 not defects · 3 rejected/deferred.**
+
+### What this review did *not* find
+The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
+not, and neither did the four items fixed in `6844401`: the pre-change boot log from
+2026-09-19 shows `<ssid>` joined, `GOT IP: <board-ip>`, and `bind()` succeeding on the
+first attempt (evidence: `logs/2026-09-19_bugfix-hardening.md`). The node was silent
+because no sender was running. Items #5/#23/#26 are still worth adding — they make a
+*future* failure visible, which is the real lesson from that misdiagnosis.
+
+---
+
+## Phase plan
+
+Rules: **one idea per build**, then build → flash → observe on hardware → log → update
+`PROJECT_STATE.md` → commit only if verified. A phase is not done until its gate passes.
+Order is deliberate: C must land before any change to `node_cfg_t` (#16), and A comes
+first because it is what makes the remaining phases diagnosable.
+
+### Phase A — close the diagnostic gaps (no behaviour change beyond logging/timeout)
+Items: **#4 (`socket()` path), #5, #23, #26**
+- #4: the `socket()` failure path still does `vTaskDelay(2000); return;` — retry it like `bind()`.
+- #5: check `esp_wifi_connect()`'s return in the `STA_START` branch and print
+  `esp_err_to_name(rc)`.
+- #23: register `WIFI_EVENT_AP_STACONNECTED` / `AP_STADISCONNECTED` → one line each
+  ("phone joined / left the setup AP"). Directly answers "did my phone reach the AP?".
+- #26: `SO_RCVTIMEO` (5 s) on the UDP socket + a heartbeat when no packet has arrived for
+  30 s ("udp: idle 30 s, pkts=0"), so an idle-but-healthy node is distinguishable from a
+  dead one. Never block/abort on the timeout — log and continue.
+
+**Gate:** boot shows `esp_wifi_connect rc=0`; joining the AP prints the join line; with no
+sender the board prints an idle heartbeat; a 12 s tone then prints `dropped=0` byte-exact
+and the heartbeat stops.
+
+### Phase B — portal input handling
+Items: **#15, #14, #27, #11, #16**
+- #15: `inet_pton`-validate `server_ip` before saving; on failure return HTTP 400 with a
+  message instead of silently degrading to "accept any".
+- #14: hoist `strlen(src)` out of the `url_decode` loop.
+- #27: `const char *html` (or send the literal directly).
+- #11: idiomatic `strtok_r`: first call with `body`, then `NULL`.
+- #16: **DECISION REQUIRED** — `server_port` is stored in NVS and shown in the form but
+  **used nowhere**: the board always listens on `UDP_PORT` (1234). Either (a) wire it up
+  (`bind` to the configured port) or (b) delete the field and the form input. (b) is the
+  lazy-correct option — nothing consumes the value — but it changes the NVS blob, so it
+  must land after Phase C.
+
+**Gate:** boot to the setup AP → POST an invalid IP → HTTP 400 with a clear message; POST
+a valid config → save → reboot → STA; re-provision round trip re-verified on hardware.
+
+### Phase C — NVS config versioning (prerequisite for #16)
+Items: **#12, #13**
+- #12: add `uint8_t version` to `node_cfg_t` (defined macro, e.g. `CFG_VERSION 2`).
+- #13: after `nvs_get_blob`, require `len == sizeof(node_cfg)` and `version == CFG_VERSION`;
+  any mismatch → log the reason and treat the config as absent → setup AP.
+
+Note (verified in IDF v6.1 `nvs_api.cpp`): a *shorter* stored blob loads successfully
+(copies `dataSize`, returns OK), so trailing bytes are zeroed only by luck of static
+initialisation; a *larger* one returns `ESP_ERR_NVS_INVALID_LENGTH`. The real hazard is a
+reordered/retyped struct, which is exactly what the version field catches.
+
+**Gate:** flash the new image over a board with an existing config → still joins, no
+spurious reset; hand-write a mismatched/old blob → setup AP with a clear log; factory
+reset still works.
+
+### Phase D — stream, timer and handle hygiene
+Items: **#17, #10, #6, #28, #18**
+- #17: cap silence fill at `ring_free() / FRAME_BYTES` frames. **There is no overflow**
+  (`ring_write` returns partial when full), but up to 64 × 1920 = 122 KB of silence can
+  saturate the 256 KB ring, so the real PCM written on the next line gets 0 bytes and
+  valid audio is dropped.
+- #10: initialise `tone_ms` explicitly at pump start (and fix the stale
+  "tcp_task switches back to mode 1" comment above it).
+- #6: reset `sta_start = 0` in the `ap_active` branch (latent — `ap_active` only returns
+  to 0 at boot today, but the reset makes the timer honest).
+- #28: make `hd` static and `httpd_stop(hd)` if it is already non-NULL.
+- #18: use `int64_t` ms for `last_pkt_ms` (the current `uint32_t` wrap *works* via
+  unsigned arithmetic and the 200 ms comparison — it is fragile, not broken).
+
+**Gate:** 60 s tone `dropped=0` byte-exact; kill the sender mid-stream and restart it →
+audio recovers, ring never saturates; failover→AP re-verified.
+
+### Phase E — boot & amp hygiene
+Items: **#32, #29**
+- #32: drive `PIN_SD` HIGH *after* `i2s_init()` (1-line reorder; the floating-DIN window is
+  ~1 ms and the MAX98357A emits nothing without clocks, so this is hygiene, not a bugfix).
+- #29: `esp_wifi_stop()` before `nvs_flash_erase()` in the factory-reset task — the Wi-Fi
+  driver holds its own NVS handle (`nvs.net80211` + PHY calibration) while connected.
+
+**Gate:** boot tone clean by ear; factory reset (BOOT 5 s) → NVS erased → setup AP,
+repeated 3× with no NVS error and no panic.
+
+### Phase F — polish, only with justification
+Items: **#8, #20, #25**
+- #8: document the Xtensa 32-bit atomicity assumption at the flag declarations (or move to
+  `_Atomic` if it must be portable). No demonstrated bug.
+- #20: a lock-free ring is a rewrite of the most timing-critical path in the firmware. Only
+  consider it against a **measurement** (e.g. `i2s_channel_write` starvation counts or
+  `pump_chunks` rate during a long stream). One producer at 50 Hz and one consumer at
+  ~47 Hz sharing a 1920-byte `memcpy` is not a demonstrated bottleneck.
+- #25: `PRIu32` instead of `(unsigned long)` casts — cosmetic; the current code is correct.
+
+---
+
+## Evidence appendix (the verdicts that are not obvious)
+
+**E-1 · #7 "udp_task runs before Wi-Fi is up" — not a defect.**
+`bind()` to `INADDR_ANY:1234` does not require an interface to have an address. Verified
+three times on hardware on 2026-09-19: `udp: listening on 0.0.0.0:1234` prints at ~1.09 s
+and the socket receives normally after `GOT IP` at ~4.35 s (`dropped=0`). Setup-AP mode
+also keeps the listener without harm (`docs/ARCHITECTURE.md` states this deliberately).
+
+**E-2 · #6 — latent, not live.** `ap_active` is set to 1 only by `setup_ap_start()` and
+cleared to 0 only by `sta_mode_start()`, which is called only from `app_main()`. After
+failover, `ap_active` stays 1 until the portal reboots the board, so the "timer still
+counting from a previous attempt" window cannot open today. The one-line reset is still
+worth taking so the invariant holds if setup-AP restart logic is ever added.
+
+**E-3 · #9 / #21 — the mutex *is* held.** `audio_pump_task` takes `ring_mutex`, reads
+`avail = ring_used()`, then releases it before `ring_read()`; `ring_read()` re-clamps under
+the lock (`if (len > avail) len = avail;`). A stale `avail` can only mean a slightly
+smaller read or one iteration of silence — never corruption.
+
+**E-4 · #17 — real symptom, wrong mechanism.** `ring_write()` cannot overrun: it loops
+`while (written < len)` and returns early when `ring_free() == 0`. The burst is bounded at
+`gap > 64 → gap = 1`, so worst case is 64 silence frames (122 KB) flushed into a 256 KB
+ring *before* the current packet's payload is written; that payload then gets `w = 0` and
+is lost. Capping by free space is the correct fix.
+
+**E-5 · #18 — works today.** Both sides are `uint32_t` and the comparison is
+`(uint32_t)(esp_timer_get_time()/1000) - lp < 200`, which is wrap-correct across the ~49-day
+overflow. It is fragile rather than broken.
+
+**E-6 · #24 — already silent.** `rssi_task` prints only when
+`esp_wifi_sta_get_ap_info() == ESP_OK`, which fails in AP mode; so AP mode already produces
+no `rssi=` line. The useful version of this concern is covered by #23/#26 in Phase A
+(explicit AP-mode heartbeat).
+
+**E-7 · #25 — the cast makes it correct.** The log uses
+`(unsigned long)pkts` with `%lu`, so the conversion is explicit and portable regardless of
+whether `uint32_t` is `unsigned int`. `PRIu32` is tidier, not safer.
+
+**E-8 · #30 — unreachable.** `gain_clip()` has exactly one caller
+(`gain_clip(mono[i])`, `mono` is `int16_t[]`), so `|s| ≤ 32768` and `s *= PCM_GAIN` peaks at
+65 536 — three orders of magnitude below `INT32_MAX`. The existing clamp handles the real
+domain.
+
+**E-9 · #31 — already handled.** Both restart paths delay before rebooting: 300 ms in
+`portal_save_handler` and 200 ms in `factory_reset_task`, each well over the ~21 ms DMA
+depth, so the last audio chunk drains (the 300 ms exists to flush the HTTP response and
+covers audio too).
+
+**E-10 · Found during this triage (not in the review): `docs/GUIDELINES.md` was
+duplicated.** A previous patch had appended an evolved copy of the guideline sections, so
+sections 7–101 repeated at 188–290 with the unique "Repository layout" /
+"Audio Player App" content wedged between them (which is why a one-line edit appeared as
+two identical hunks). Rebuilt losslessly on 2026-09-19: 290 → 196 lines, 12 unique
+headings, 6 declared supersessions, zero unexpected line drops
+(`tmp/dedupe_guidelines.py`).
+
+**E-11 · Also found: dead code.** `config.py` defined `sched_save()` / `sched_load()`
+(nothing imported them) — added by a previous session's patch script and never wired up.
+Removed 2026-09-19 (the app persists schedules through `settings_save()`).
