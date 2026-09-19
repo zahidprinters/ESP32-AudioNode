@@ -23,6 +23,7 @@
 #include "led_strip.h"
 #include "esp_http_server.h"
 #include "esp_system.h"
+#include "esp_mac.h"      /* MACSTR / MAC2STR for the setup-AP station logs */
 #include <stdlib.h>
 
 /* P1: RTP L16 over UDP — 48 kHz, 16-bit, mono, 20 ms frames (960 samples / 1920 bytes) */
@@ -159,7 +160,10 @@ static esp_err_t cfg_load(void)
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        /* Never silent: without the rc, a connect that never started looks
+           exactly like a connect that failed. */
+        esp_err_t rc = esp_wifi_connect();
+        printf("wifi: esp_wifi_connect rc=%d (%s)\n", rc, esp_err_to_name(rc));
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         /* Log the reason — "disconnected" alone is undiagnosable.
            Common codes: 15/202 = handshake/auth fail (often wrong password),
@@ -178,6 +182,14 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
         /* IP dropped silently (e.g. lease lost / router reassigned it) */
         printf("IP_EVENT_STA_LOST_IP\n");
         net_state = 0;
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STACONNECTED) {
+        /* Setup-AP clients: without these, "did my phone even reach the AP?"
+           is unanswerable from the serial log. */
+        wifi_event_ap_staconnected_t *e = (wifi_event_ap_staconnected_t *)data;
+        printf("ap: station " MACSTR " joined (aid=%d)\n", MAC2STR(e->mac), e->aid);
+    } else if (base == WIFI_EVENT && id == WIFI_EVENT_AP_STADISCONNECTED) {
+        wifi_event_ap_stadisconnected_t *e = (wifi_event_ap_stadisconnected_t *)data;
+        printf("ap: station " MACSTR " left (aid=%d)\n", MAC2STR(e->mac), e->aid);
     }
 }
 
@@ -580,12 +592,13 @@ static void led_task(void *arg)
    Missing packets -> silence fill; never block I2S on a lost UDP packet. */
 static void udp_task(void *arg)
 {
-    /* UDP socket bound to port 1234 */
-    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) {
-        printf("udp: socket failed (errno=%d)\n", errno);
-        vTaskDelay(pdMS_TO_TICKS(2000));
-        return;
+    /* UDP socket bound to port 1234. socket() failing is as fatal as bind()
+       failing (silent `return` = no listener for the whole boot), so retry it
+       the same way. */
+    int sock;
+    while ((sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+        printf("udp: socket failed (errno=%d), retrying...\n", errno);
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 
     struct sockaddr_in local = {0};
@@ -614,14 +627,41 @@ static void udp_task(void *arg)
     uint64_t total = 0;
     uint32_t pkts = 0, dropped = 0;
     int64_t last_log = 0;
+    int64_t last_rx_us = esp_timer_get_time();
+    int idle_reported = 0;
 
     while (1) {
-        int len = recvfrom(sock, rx_buf, sizeof(rx_buf), 0,
+        /* Non-blocking: with a blocking recvfrom an idle-but-healthy board and
+           a dead one look identical on the serial log (nothing prints either
+           way). MSG_DONTWAIT avoids relying on errno == EWOULDBLOCK/EAGAIN.
+           This is not a busy loop — we sleep below when no datagram is ready. */
+        int len = recvfrom(sock, rx_buf, sizeof(rx_buf), MSG_DONTWAIT,
                            (struct sockaddr *)&peer, &peer_len);
         if (len < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN) {
+                /* no datagram ready: the normal state between streams */
+                if (!idle_reported &&
+                    esp_timer_get_time() - last_rx_us >= 30LL * 1000 * 1000) {
+                    printf("udp: idle %lld s, pkts=%lu dropped=%lu total=%llu bytes"
+                           " (listening on :%d)\n",
+                           (long long)((esp_timer_get_time() - last_rx_us) / 1000000),
+                           (unsigned long)pkts, (unsigned long)dropped,
+                           (unsigned long long)total, UDP_PORT);
+                    idle_reported = 1;
+                }
+                /* 1 tick = 10 ms at CONFIG_FREERTOS_HZ=100, so this polls ~100x/s
+                   while a stream arrives at 50x/s (48 kHz / 960) — the 6-deep UDP
+                   mailbox absorbs any burst. NB: pdMS_TO_TICKS(5) is 0 ticks at
+                   100 Hz (it would busy-spin), hence the explicit tick delay. */
+                vTaskDelay(1);
+                continue;
+            }
             printf("udp: recvfrom err=%d\n", errno);
+            vTaskDelay(pdMS_TO_TICKS(100));     /* don't spin on a persistent error */
             continue;
         }
+        last_rx_us = esp_timer_get_time();
+        idle_reported = 0;
         if (ring_buf == NULL) {
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;

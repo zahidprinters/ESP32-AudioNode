@@ -29,6 +29,7 @@
 - **Firmware robustness hardening (2026-09-19)**: four review-found issues fixed in `main.c`, **VERIFIED on hardware** — (1) the captive-portal `POST /save` body read wrote `body[1024] = '\0'` one byte past `char body[1024]` when a full 1024-byte body arrived (now bounded at `sizeof(body) - 1`, chunked `httpd_req_recv` instead of 1 byte/call); (2) `WIFI DISCONNECTED: reason=%d` — the disconnect reason code is no longer discarded; (3) `IP_EVENT_STA_LOST_IP` registered + handled (`net_state = 0`); (4) `udp_task` `bind()` failure retries every 1 s instead of `close()+return` (a single bind failure used to kill UDP silently for the whole boot). Build 0 errors (`audio_node.bin` 0xdc140), flash `Hash of data verified`, boot → `udp: listening on 0.0.0.0:1234` + `GOT IP <board-ip>`, 12 s tone → `pkts=327 dropped=0 pcm=627840` (327 × 1920 byte-exact) at 50.0 fps. Log: `logs/2026-09-19_bugfix-hardening.md`
 - **Not a fault (2026-09-19)**: a reported "board is not getting an IP" did **not reproduce** — the pre-change boot log shows `wifi:connected ... rssi: -42` → `GOT IP: <board-ip>` and `udp: listening on 0.0.0.0:1234` succeeding on the first `bind()` attempt. The node was silent because **no sender was running**, not because of Wi-Fi or the socket.
 - **Audit register opened + housekeeping (2026-09-19)**: `docs/AUDIT.md` records external code reviews, **every item re-verified against the source before a verdict** (a review is a hypothesis; code + hardware are the evidence). Round 1 triaged a 32-item review: 5 already satisfied, 19 valid and phased A–F with per-phase hardware gates, 5 claims demonstrably inaccurate, 3 rejected/deferred — each with evidence in the appendix. Phase A (close the diagnostic gaps: `esp_wifi_connect` rc, AP join/leave, UDP idle heartbeat, `socket()` retry) is the next firmware work; Phases B–F follow, and Phase C **must** land before any change to `node_cfg_t`. Same pass found and fixed two defects: `docs/GUIDELINES.md` was duplicated (a patch had appended an evolved copy of sections 7–101 — rebuilt losslessly 290 → 196 lines, 12 unique headings, 6 declared supersessions) and `audio_player/config.py` carried dead `sched_save()`/`sched_load()` helpers that nothing imported (removed)
+- **Phase A of the audit backlog IMPLEMENTED + verified (2026-09-19, `P14`)**: the four diagnostic gaps are closed in `main.c` — boot now logs `wifi: esp_wifi_connect rc=0 (ESP_OK)` (a connect that never started used to look identical to one that failed); `udp_task` is non-blocking (`MSG_DONTWAIT`) with a **single** idle heartbeat after 30 s (`udp: idle 30 s, pkts=0 dropped=0 total=0 bytes`) so an idle-but-healthy node is distinguishable from a dead one; `socket()` failure now retries like `bind()`; setup-AP station join/leave is logged (`ap: station <mac> joined (aid=N)`). Hardware: 45 s idle → exactly one heartbeat; 30 s tone → `pkts=1255 dropped=0 pcm=2409600` byte-exact at 50.0 fps with **no** heartbeat during the stream; 40 s later it resumes as `pkts=1500 ... total=2880000 bytes`. Two traps caught pre-flight: `CONFIG_FREERTOS_HZ=100` makes `pdMS_TO_TICKS(5)` **0 ticks** (busy-spin) → used `vTaskDelay(1)`; and `CONFIG_LWIP_SO_RCVTIMEO` is unset, so the review's suggested `SO_RCVTIMEO` would have silently done nothing. **#23 is code-complete but not hardware-verified** — this PC's Wi-Fi radio is software-disabled and enabling it needs elevation. **Re-verified on the exact flashed image** (rebuilt + re-flashed, all three gates re-run in one 100 s capture); across-run `dropped` variance (0/20/5 on identical code) was diagnosed as RF burst loss (4–6-packet bursts ≈ ~120 ms link blackouts), not the new poll. Log: `logs/2026-09-19_phaseA-diagnostics.md`
 - Toolchain: **IDF v6.1** `D:\esp32\v6.1\esp-idf` + `C:\Espressif\...\env.ps1`
 
 ## 2. FEATURE MAP (what exists / what's left)
@@ -53,6 +54,7 @@
 | **P11: 10-band EQ + presets (server-side)** | 🟡 code-complete, awaiting user ears | `audio_player/config.py`, `player.py`, `app.py`, `static/` | VLC 10-band grid + preamp; live apply via restart-at-position; alimiter stays LAST (never clip); 10 built-in presets + user presets in `eq_presets.json` (git-ignored) |
 | **P12: firmware robustness (guards + diagnostics)** | ✅ VERIFIED 2026-09-19 | `main/main.c` | Portal POST body read bounded (`sizeof(body) - 1`, chunked recv — was a 1-byte overflow), `WIFI DISCONNECTED: reason=%d`, `IP_EVENT_STA_LOST_IP` handled, `udp_task` `bind()` retries instead of dying. Log: `logs/2026-09-19_bugfix-hardening.md` |
 | **P13: audit register + phase plan** | ✅ OPEN 2026-09-19 | `docs/AUDIT.md` | Register for external code reviews, every item re-verified against the source. Round 1 (32-item review): 5 already satisfied (incl. #1–#3 = P12), 19 valid phased A–F, 5 claims inaccurate, 3 rejected/deferred — each with recorded evidence. **Phase A (diagnostics) is the next firmware work** |
+| **P14: Phase A — diagnostic gaps closed** | ✅ VERIFIED 2026-09-19 (3/4 gates on HW; re-verified after re-flash from fresh rebuild) | `main/main.c` | `esp_wifi_connect` rc logged; `udp_task` non-blocking + 30 s idle heartbeat (single, not spam); `socket()` retries; AP station join/leave logged. #23 pending HW verify (no usable Wi-Fi client on the dev PC). Across-run `dropped` variance (0/20/5) diagnosed as RF burst loss, not the poll (log has the burst analysis). Log: `logs/2026-09-19_phaseA-diagnostics.md` |
 
 ## 3. VERIFIED WORKING ✅ (do not break)
 **TCP prototype milestones — archived, audio pipeline reused in RTP build:**
@@ -201,13 +203,14 @@
 12. 🔲 V2 candidates: node back-channel (board → server status packet), MP3/AAC RTP depacketizer on the board, playlist/next-track, `threading` async mode to drop the eventlet deprecation
 13. 🔲 Commit each verified milestone only
 
-**Audit backlog (from `docs/AUDIT.md` — 19 valid items, phased):** next firmware work is
-**Phase A** (diagnostics: `esp_wifi_connect` rc, AP join/leave, UDP idle heartbeat,
-`socket()` retry), then **B** (portal: IP validation, HTTP 400 on bad input, `strlen`
-hoist, `const html`, idiomatic `strtok_r`, **`server_port` decision**), then **C** (NVS
-config version — must precede B's `node_cfg_t` change), **D** (silence-fill cap, `tone_ms`,
-failover timer, `httpd_stop`, `int64_t` ms), **E** (amp enable after `i2s_init`,
-`esp_wifi_stop` before NVS erase), **F** (polish, only against a measurement).
+**Audit backlog (from `docs/AUDIT.md` — 14 valid items remaining, phased):** next firmware
+work is **Phase B** (portal: IP validation + HTTP 400, `strlen` hoist, `const html`,
+idiomatic `strtok_r`, **`server_port` decision**), then **C** (NVS config version — must
+land before B's `node_cfg_t` change), **D** (silence-fill cap, `tone_ms`, failover timer,
+`httpd_stop`, `int64_t` ms), **E** (amp enable after `i2s_init`, `esp_wifi_stop` before NVS
+erase), **F** (polish, only against a measurement). Phase A (diagnostics) ✅ done as P14;
+its one open hardware item (#23 AP join/leave log) needs any Wi-Fi client to join
+`AudioNode-Setup` once.
 
 ## 12. DEV TOOLING (2026-09-11, non-firmware)
 - Cline global tooling installed (details: `logs/2026-09-11_cline-global-tooling.md`): ponytail rule

@@ -24,8 +24,8 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 1 | Buffer overflow: `body[1024]` written past the array | ✅ Fixed — `6844401` | — |
 | 2 | Disconnect reason code discarded | ✅ Fixed — `6844401` | — |
 | 3 | `IP_EVENT_STA_LOST_IP` never registered | ✅ Fixed — `6844401` | — |
-| 4 | `udp_task` bind failure exits silently | ✅ `bind()` retry added; 🔲 `socket()` path still returns | A |
-| 5 | `esp_wifi_connect()` return ignored in `STA_START` | 🔲 valid | A |
+| 4 | `udp_task` bind failure exits silently | ✅ Done `P14` — `socket()` and `bind()` both retry | A ✅ |
+| 5 | `esp_wifi_connect()` return ignored in `STA_START` | ✅ Done `P14` — rc + `esp_err_to_name()` logged | A ✅ |
 | 6 | `failover_task` timer not reset while `ap_active` | 🔲 valid (latent — see E-2) | D |
 | 7 | `udp_task` launched before Wi-Fi is up | ⚠️ not a defect — proven on hardware | — |
 | 8 | `volatile` flags not atomic | 🔲 valid (documentation-level) | F |
@@ -43,10 +43,10 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 20 | Ring mutex held during `memcpy` → use a lock-free ring | ❌ deferred — needs a measurement first | F |
 | 21 | `audio_pump_task` calls `ring_used()` with a mutex drop | ⚠️ inaccurate — same as #9 | — |
 | 22 | No SSID logged at connect time | ✅ already present (`STA: joining %s`) | — |
-| 23 | No log when a client joins/leaves the setup AP | 🔲 valid | A |
+| 23 | No log when a client joins/leaves the setup AP | 🟡 Code-complete `P14` — HW verify blocked (no usable Wi-Fi client, see E-12) | A |
 | 24 | `rssi_task` noisy in AP mode | ⚠️ inaccurate — it already prints nothing | — |
 | 25 | `%lu` for `uint32_t` in the UDP stats log | ❌ not a bug — the cast is explicit | — |
-| 26 | No socket timeout / heartbeat on `udp_task` | 🔲 valid | A |
+| 26 | No socket timeout / heartbeat on `udp_task` | ✅ Done `P14` — non-blocking poll + 30 s idle heartbeat | A ✅ |
 | 27 | `char *html` pointing at a string literal | 🔲 valid (trivial) | B |
 | 28 | `setup_ap_start` leaks the `httpd_handle_t` | 🔲 valid (latent) | D |
 | 29 | `nvs_flash_erase()` while Wi-Fi is running | 🔲 valid | E |
@@ -54,7 +54,8 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
 | 32 | `PIN_SD` driven HIGH before `i2s_init()` | 🔲 valid (low) | E |
 
-**Tally: 32 items → 5 already satisfied · 19 valid · 5 not defects · 3 rejected/deferred.**
+**Tally: 32 items → 8 done (5 pre-existing + #4/#5/#26 in Phase A) · 1 code-complete with HW
+verify pending (#23) · 14 valid remaining · 5 not defects · 3 rejected/deferred.**
 
 ### What this review did *not* find
 The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
@@ -87,6 +88,18 @@ Items: **#4 (`socket()` path), #5, #23, #26**
 **Gate:** boot shows `esp_wifi_connect rc=0`; joining the AP prints the join line; with no
 sender the board prints an idle heartbeat; a 12 s tone then prints `dropped=0` byte-exact
 and the heartbeat stops.
+
+**Status 2026-09-19 — IMPLEMENTED (`P14`), 3 of 4 gate items verified on hardware.**
+Boot prints `wifi: esp_wifi_connect rc=0 (ESP_OK)`; 45 s with no sender prints exactly one
+`udp: idle 30 s, pkts=0 dropped=0 total=0 bytes`; a 30 s tone gives 50.0 fps with the
+heartbeat silent during the stream, then resumes with accumulated totals. **Re-verified on
+the exact flashed image** (rebuilt from the unchanged tree, re-flashed `'audio_node.bin'
+at 0x00010000 verified.`, all three gates re-run in one 100 s capture). Across-run
+`dropped` variance (0 → 20 → 5 over identical code) was diagnosed as RF burst loss
+(4–6-packet bursts ≈ ~120 ms link blackouts), not the new poll — burst analysis in the log.
+The AP join line (#23) is **code-complete but not hardware-verified** — this PC's Wi-Fi
+radio is software-disabled, enabling it needs elevation, and nothing else ever joins the
+setup AP. Evidence: `logs/2026-09-19_phaseA-diagnostics.md`; how to close it is in E-12.
 
 ### Phase B — portal input handling
 Items: **#15, #14, #27, #11, #16**
@@ -217,3 +230,24 @@ headings, 6 declared supersessions, zero unexpected line drops
 **E-11 · Also found: dead code.** `config.py` defined `sched_save()` / `sched_load()`
 (nothing imported them) — added by a previous session's patch script and never wired up.
 Removed 2026-09-19 (the app persists schedules through `settings_save()`).
+
+
+**E-12 · Phase A implementation traps + the #23 blocker (2026-09-19).**
+Two silent-failure traps surfaced while building Phase A:
+(a) **`CONFIG_FREERTOS_HZ=100` in this project**, so `pdMS_TO_TICKS(5)` evaluates to **0
+ticks** and `vTaskDelay(0)` is a bare yield — the idle poll would have busy-spun at priority
+4 forever. Use `vTaskDelay(1)` (= 10 ms) and do the tick arithmetic explicitly.
+(b) **`SO_RCVTIMEO` is not compile-enabled here** (`CONFIG_LWIP_SO_RCVTIMEO` is unset), so the
+`setsockopt(SO_RCVTIMEO)` the review recommended would compile, return success and change
+nothing — the heartbeat would never have fired. `MSG_DONTWAIT` was used instead (defined
+`0x08` in `lwip/sockets.h:272`, honoured as `NETCONN_DONTBLOCK` in the UDP recv path).
+Rate sanity for the non-blocking poll: streams arrive at **50 datagrams/s** (48 000 / 960),
+the poll runs ~100x/s, and the UDP mailbox is 6 deep (`CONFIG_LWIP_UDP_RECVMBOX_SIZE=6`) —
+~2.4x margin, confirmed by `dropped=0` over 30 s.
+**#23 cannot be closed from this machine**: the Wi-Fi radio is software-disabled
+(`netsh wlan show interfaces` → `Software Off`) and `netsh wlan set autoconfig enabled=yes
+interface="Wi-Fi"` returns *"You do not have sufficient privileges or group policy has been
+applied."* The open-network profile for `AudioNode-Setup` was added successfully, so closing
+it takes one privileged step: enable the radio (or use a phone), put the board in setup-AP
+mode (hold BOOT 5 s), join the AP, and expect `ap: station <mac> joined (aid=1)` on join plus
+`ap: station <mac> left (aid=1)` on leave.
