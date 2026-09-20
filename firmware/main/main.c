@@ -468,6 +468,11 @@ static void factory_reset_task(void *arg)
                                  FACTORY_HOLD_MS / 1000);
         held_ms += 50;
         if (held_ms >= FACTORY_HOLD_MS) {
+            /* #29: stop + deinit Wi-Fi BEFORE erasing NVS — the Wi-Fi driver
+               holds its own NVS handles (nvs.net80211, PHY calibration) and can
+               race the erase. Errors are harmless: the board reboots below. */
+            esp_wifi_stop();
+            esp_wifi_deinit();
             esp_err_t e = nvs_flash_erase();
             if (e != ESP_OK) {                        /* keep config rather than lose it */
                 printf("factory reset: NVS erase failed (0x%x), aborting\n", e);
@@ -794,12 +799,13 @@ void app_main(void)
     printf("I2S: %d Hz, 16-bit mono, BCLK=%d LRC=%d DIN=%d SD=%d RGB=%d\n",
            SAMPLE_RATE, PIN_BCLK, PIN_LRC, PIN_DIN, PIN_SD, PIN_RGB);
 
-    /* Amp enable (SD HIGH) */
+    /* #32: amp enable (SD HIGH) AFTER i2s_init() — with SD high while DIN is
+       still floating, the amp would amplify board noise. Now the amp wakes
+       with the I2S clocks already running. */
+    i2s_init();
     ESP_ERROR_CHECK(gpio_reset_pin(PIN_SD));
     ESP_ERROR_CHECK(gpio_set_direction(PIN_SD, GPIO_MODE_OUTPUT));
     gpio_set_level(PIN_SD, 1);
-
-    i2s_init();
 
     /* RGB LED (WS2812 on GPIO48): connection state + audio VU */
     rgb_init();

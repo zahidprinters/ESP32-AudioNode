@@ -43,19 +43,19 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 20 | Ring mutex held during `memcpy` → use a lock-free ring | ❌ deferred — needs a measurement first | F |
 | 21 | `audio_pump_task` calls `ring_used()` with a mutex drop | ⚠️ inaccurate — same as #9 | — |
 | 22 | No SSID logged at connect time | ✅ already present (`STA: joining %s`) | — |
-| 23 | No log when a client joins/leaves the setup AP | 🟡 Code-complete `P14` — HW verify blocked (no usable Wi-Fi client, see E-12) | A |
+| 23 | No log when a client joins/leaves the setup AP | ✅ Done `P14` code — **HW verified `P18`**: join AND leave lines captured live | A ✅ |
 | 24 | `rssi_task` noisy in AP mode | ⚠️ inaccurate — it already prints nothing | — |
 | 25 | `%lu` for `uint32_t` in the UDP stats log | ❌ not a bug — the cast is explicit | — |
 | 26 | No socket timeout / heartbeat on `udp_task` | ✅ Done `P14` — non-blocking poll + 30 s idle heartbeat | A ✅ |
 | 27 | `char *html` pointing at a string literal | ✅ Done `P15` — `const char *` | B ✅ |
 | 28 | `setup_ap_start` leaks the `httpd_handle_t` | ✅ Done `P17` — static `hd` + `httpd_stop` guard (inert today, single call) | D ✅ |
-| 29 | `nvs_flash_erase()` while Wi-Fi is running | 🔲 valid | E |
+| 29 | `nvs_flash_erase()` while Wi-Fi is running | ✅ Done `P18` — wifi stop+deinit before the erase; reset cycle clean | E ✅ |
 | 30 | `gain_clip` multiply can overflow `int32_t` | ❌ not reachable from any caller | — |
 | 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
-| 32 | `PIN_SD` driven HIGH before `i2s_init()` | 🔲 valid (low) | E |
+| 32 | `PIN_SD` driven HIGH before `i2s_init()` | ✅ Done `P18` — SD driven HIGH after `i2s_init()` | E ✅ |
 
-**Tally (recounted from the table): 32 items → 19 done · 1 code-complete with HW verify
-pending (#23) · 3 valid remaining · 5 not defects · 4 rejected/deferred.**
+**Tally (recounted from the table): 32 items → 22 done · 1 valid remaining · 5 not defects ·
+4 rejected/deferred.**
 
 ### What this review did *not* find
 The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
@@ -97,9 +97,9 @@ the exact flashed image** (rebuilt from the unchanged tree, re-flashed `'audio_n
 at 0x00010000 verified.`, all three gates re-run in one 100 s capture). Across-run
 `dropped` variance (0 → 20 → 5 over identical code) was diagnosed as RF burst loss
 (4–6-packet bursts ≈ ~120 ms link blackouts), not the new poll — burst analysis in the log.
-The AP join line (#23) is **code-complete but not hardware-verified** — this PC's Wi-Fi
-radio is software-disabled, enabling it needs elevation, and nothing else ever joins the
-setup AP. Evidence: `logs/2026-09-19_phaseA-diagnostics.md`; how to close it is in E-12.
+The AP join line (#23) was **code-complete but hardware-unverified** at that time (this PC's
+Wi-Fi radio was software-disabled); it was **hardware-verified on 2026-09-20** — join AND
+leave lines captured live during the Phase E factory-reset cycle (see Phase E status / E-16). Evidence: `logs/2026-09-19_phaseA-diagnostics.md`; how to close it is in E-12.
 
 ### Phase B — portal input handling
 Items: **#15, #14, #27, #11** (#16 re-slotted to Phase C — it changes `node_cfg_t`/the NVS
@@ -206,6 +206,21 @@ Items: **#32, #29**
 
 **Gate:** boot tone clean by ear; factory reset (BOOT 5 s) → NVS erased → setup AP,
 repeated 3× with no NVS error and no panic.
+
+**Status 2026-09-20 — IMPLEMENTED (`P18`), verified in one full cycle.** #32: the amp's SD
+pin is driven HIGH only after `i2s_init()`; #29: `esp_wifi_stop()` + `esp_wifi_deinit()`
+run before `nvs_flash_erase()` in the factory-reset task. Hardware: flashed (`Hash of data
+verified`), 30 s regression byte-exact (`1452 × 1920`, `dropped=0`, ring 14.6 KB); the user
+held BOOT ~5 s with a capture already running → `BOOT held` → `NVS erased, rebooting into
+setup AP` — **zero NVS errors, zero panic markers** — and the boot tone played through the
+reordered amp path. BONUS — the same capture closed two older wire items: **#23
+hardware-verified** (`ap: station … joined (aid=1)` AND `… left (aid=1)` captured live) and
+the **Phase B wire save-path** (`cfg: saved via portal (SSID=… server=<pc-ip>)` —
+new #16 format, #15-validated IP → reboot → `server whitelist` → `STA: joining` →
+`GOT IP` → idle heartbeat; final 12 s stream byte-exact `480 × 1920`, `dropped=0`).
+Remaining: the bad-IP → HTTP 400 half of B's gate (needs a deliberate bad submission the
+next time the portal is open) and the user's explicit "boot tone clean" confirmation.
+Evidence: `logs/2026-09-20_phaseE-boot-amp.md`.
 
 ### Phase F — polish, only with justification
 Items: **#8, #20, #25**
@@ -344,4 +359,16 @@ Both checks together: `len == sizeof(node_cfg) && version == CFG_VERSION`.
   restart). Always cross-check counters for continuity before reading them as firmware
   behaviour; the board itself showed zero panic/watchdog/reset markers across every
   Phase D capture.
+
+**E-16 · Phase E notes + the closure cascade (2026-09-20).**
+- The full factory-reset/re-provision cycle landed on record because a long-running
+  background capture was started BEFORE the user touched the button — that is also how
+  #23's join/leave lines and B's wire save-path closed in the same session. Pattern worth
+  repeating: start the capture first, then hand the user the hardware action.
+- #29's stop/deinit runs in the factory-reset task (task context — legal). The theoretical
+  interleave (failover firing after the deinit) cannot occur: failover is gated on
+  `ap_active == 0 && net_state < 1 for 30 s`, which is not the state during a normal
+  factory reset (STA-with-IP or AP mode) — unchanged by #29.
+- A second brief BOOT press during AP mode printed "BOOT held" and released early — the
+  task's cancel path (`held_ms >= 1000 → released, cancelled`) behaved as designed.
 
