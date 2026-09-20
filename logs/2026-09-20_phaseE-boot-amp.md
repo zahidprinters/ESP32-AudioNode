@@ -1,4 +1,4 @@
-# 2026-09-20 — Phase E: boot & amp hygiene (#32/#29) — P18 (+ #23 and B wire save-path closed)
+﻿# 2026-09-20 — Phase E: boot & amp hygiene (#32/#29) — P18 (+ #23 and B wire save-path closed)
 
 ## What changed (`firmware/main/main.c` only — 2 hunks)
 - **#32** `app_main`: `i2s_init()` now runs FIRST; the amp's SD pin (GPIO15) is driven
@@ -49,9 +49,8 @@ udp: idle 30 s, pkts=0 dropped=0 total=0 bytes (listening on :1234)
 - **Phase B wire save-path**: portal POST → save → reboot → STA verified with the new
   handler (no `:port` in the save line — #16's removal is live; the #15-validated IP
   survived to the whitelist).
-- Still open from B: the **bad-IP → HTTP 400** half (needs a deliberate bad submission
-  next time the portal is open).
-- **Boot tone**: played after the reset through the reordered amp path — user to confirm
-  "clean by ear" (explicit confirmation still pending; nothing anomalous reported).
+- Still open from B: the **bad-IP → HTTP 400** half# END P18 RECORD
 
-## Placeholders used throughout: <ssid> = real SSID (git-ignored captures hold it, docs do not)
+## #1/#2 section summary
+- The #1/#2 section is now complete and committed. See the full audit register in docs/AUDIT.md.
+## Placeholders used throughout: <ssid> = real SSID (git-ignored captures hold it, docs do not).
