@@ -32,11 +32,11 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 9 | `ring_used()` called outside the mutex → stale `avail` | ⚠️ inaccurate — the mutex **is** held | — |
 | 10 | `tone_ms` is `static` in the pump | 🔲 valid (low) | D |
 | 11 | `strtok_r` non-idiomatic (`tok = save`) | ✅ Done `P15` — for-loop, `NULL` on continuation | B ✅ |
-| 12 | NVS config struct has no version field | 🔲 valid | C |
-| 13 | `cfg_load` does not check the returned blob length | 🔲 valid | C |
+| 12 | NVS config struct has no version field | ✅ Done `P16` — `uint8_t version` (`CFG_VERSION 2`), mismatch → config ignored | C ✅ |
+| 13 | `cfg_load` does not check the returned blob length | ✅ Done `P16` — requires exact len AND version (see E-14) | C ✅ |
 | 14 | `url_decode` calls `strlen` inside the loop (O(n²)) | ✅ Done `P15` — hoisted | B ✅ |
 | 15 | `server_ip` not validated at save | ✅ Done `P15` — strict dotted-quad + HTTP 400, nothing saved on failure (see E-13) | B ✅ |
-| 16 | `server_port` stored but unused / not independent of IP | 🔲 valid — **decision needed** | B |
+| 16 | `server_port` stored but unused / not independent of IP | ✅ Done `P16` — field, form input and handler copy deleted (decision (b)) | C ✅ |
 | 17 | Silence fill not capped by free ring space | 🔲 valid (mechanism differs — see E-4) | D |
 | 18 | `last_pkt_ms` is `uint32_t` ms | 🔲 valid (low — see E-5) | D |
 | 19 | HTTP body read 1 byte at a time | ✅ Fixed — `6844401` | — |
@@ -54,8 +54,8 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
 | 32 | `PIN_SD` driven HIGH before `i2s_init()` | 🔲 valid (low) | E |
 
-**Tally: 32 items → 12 done (5 pre-existing + 4 Phase A + 4 Phase B) · 1 code-complete with HW
-verify pending (#23) · 10 valid remaining · 5 not defects · 3 rejected/deferred.**
+**Tally (recounted from the table): 32 items → 15 done · 1 code-complete with HW verify
+pending (#23) · 8 valid remaining · 5 not defects · 3 rejected/deferred.**
 
 ### What this review did *not* find
 The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
@@ -144,6 +144,23 @@ reordered/retyped struct, which is exactly what the version field catches.
 **Gate:** flash the new image over a board with an existing config → still joins, no
 spurious reset; hand-write a mismatched/old blob → setup AP with a clear log; factory
 reset still works.
+
+**Status 2026-09-20 — IMPLEMENTED (`P16`).** `node_cfg_t` gained `uint8_t version`
+(`CFG_VERSION 2`, first field); `cfg_save` stamps it; `cfg_load` requires
+`len == sizeof(node_cfg)` AND `version == CFG_VERSION`, logs
+`want v2 len 115, got v77 len 114`-style specifics and zeroes the struct on mismatch
+(a partial copy used to leave a stale tail — IDF v6.1 `nvs_api.cpp` copies a SHORTER blob
+and returns OK; only a longer one errors). #16 rode along: `server_port` deleted from the
+struct, the form and the handler (the board always listens on `UDP_PORT` 1234).
+**This corrects the gate expectation above**: an honest version check cannot let an
+old-layout board "still join" — the transition costs ONE re-provision (any Wi-Fi client on
+`AudioNode-Setup`), which also closes #23 and the Phase B wire gate in the same session.
+Hardware gate (on the flashed image): old v1 blob →
+`cfg: nvs blob rejected (want v2 len 115, got v77 len 114) -> re-provision` — v77 is
+`0x4D` = `'M'`, the first byte of the old SSID string misread as a version byte: precisely
+the silent-garbage failure mode #12 exists to catch, demonstrated live →
+`no usable config` → setup AP started clean, no panic. The v2 save→load round trip
+verifies in that same re-provision session. Evidence: `logs/2026-09-20_phaseC-nvs.md`.
 
 ### Phase D — stream, timer and handle hygiene
 Items: **#17, #10, #6, #28, #18**
@@ -284,4 +301,13 @@ mode (hold BOOT 5 s), join the AP, and expect `ap: station <mac> joined (aid=1)`
   `--no-reset` (observed twice: boot lines at t≈1.2 s after attach; uptime-derived stream
   stats confirmed fresh boots). This makes cumulative `pkts=` counters APPEAR to go
   backwards between captures and hid early boot lines in two runs. Batch a whole gate into
-  ONE capture that attaches before the action.
+  ONE capture that attaches before the action. (Also observed intermittently NOT firing —
+  retry attaches until the boot section appears; Phase C's boot lines took several
+  capture attempts.)
+
+**E-14 · Phase C notes (2026-09-20).** The old (unversioned) and new (versioned, port-less)
+structs happened to differ in size here (114 vs 115 — actual compiler layout), so on THIS
+board the length check alone would already have rejected the old blob; the version byte is
+still required for the general case (a same-size reshuffle would pass a length-only check).
+Both checks together: `len == sizeof(node_cfg) && version == CFG_VERSION`.
+

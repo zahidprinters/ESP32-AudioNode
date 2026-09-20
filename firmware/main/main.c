@@ -119,13 +119,17 @@ static inline int16_t gain_clip(int32_t s)
 #define STA_FAIL_TIMEOUT_MS 30000       /* no IP in 30 s => revert to setup AP */
 #define FACTORY_HOLD_MS 5000            /* P4: BOOT hold that erases NVS */
 
-/* Persisted config blob (SSID, password, server ip/port) */
+/* Persisted config blob (SSID, password, server ip). `version` guards the layout:
+   cfg_load rejects any blob whose size or version doesn't match (#12/#13) — a
+   reordered/retyped struct used to load as silent garbage. Old unversioned blobs
+   (v1) fail the check by design -> one-time re-provision via setup AP. */
+#define CFG_VERSION 2
 typedef struct {
+    uint8_t version;      /* must equal CFG_VERSION */
     char ssid[33];
     char password[64];
     char server_ip[16];
-    uint16_t server_port;
-    uint8_t has_server;   /* 1 = server ip/port configured by user */
+    uint8_t has_server;   /* 1 = server ip configured by user (sender whitelist) */
 } node_cfg_t;
 
 static node_cfg_t node_cfg;
@@ -137,6 +141,7 @@ static EventGroupHandle_t wifi_events;
 
 static esp_err_t cfg_save(void)
 {
+    node_cfg.version = CFG_VERSION;
     nvs_handle_t h;
     if (nvs_open(CFG_NS, NVS_READWRITE, &h) != ESP_OK) return ESP_FAIL;
     esp_err_t e = nvs_set_blob(h, CFG_BLOB_KEY, &node_cfg, sizeof(node_cfg));
@@ -149,12 +154,24 @@ static esp_err_t cfg_save(void)
 static esp_err_t cfg_load(void)
 {
     nvs_handle_t h;
-    if (nvs_open(CFG_NS, NVS_READONLY, &h) != ESP_OK) return ESP_FAIL;
+    if (nvs_open(CFG_NS, NVS_READONLY, &h) != ESP_OK) return ESP_ERR_NVS_NOT_FOUND;
     size_t len = sizeof(node_cfg);
     esp_err_t e = nvs_get_blob(h, CFG_BLOB_KEY, &node_cfg, &len);
     nvs_close(h);
-    if (e == ESP_OK) cfg_loaded = 1;
-    return e;
+    /* #13: ESP_OK alone proves nothing — IDF v6.1 nvs_api.cpp copies a SHORTER
+       stored blob into our buffer and returns OK (leaving a stale tail), and
+       only a LONGER one errors. So also require the exact size (#12) and the
+       version byte; anything else is treated as no config -> setup AP. */
+    if (e != ESP_OK) return e;
+    if (len != sizeof(node_cfg) || node_cfg.version != CFG_VERSION) {
+        printf("cfg: nvs blob rejected (want v%d len %u, got v%u len %u) -> re-provision\n",
+               CFG_VERSION, (unsigned)sizeof(node_cfg),
+               (unsigned)node_cfg.version, (unsigned)len);
+        memset(&node_cfg, 0, sizeof(node_cfg));
+        return ESP_ERR_NOT_FOUND;
+    }
+    cfg_loaded = 1;
+    return ESP_OK;
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -237,7 +254,6 @@ static esp_err_t portal_get_handler(httpd_req_t *req)
         "<label>WiFi SSID</label><input name='ssid' required>"
         "<label>WiFi Password</label><input type='password' name='password'>"
         "<label>Server IP (RTP sender)</label><input name='server_ip' placeholder='192.168.1.100'>"
-        "<label>Server Port</label><input name='server_port' value='1234'>"
         "<button type='submit'>Save &amp; Connect</button></form>"
         "</body></html>";
     httpd_resp_set_type(req, "text/html");
@@ -296,8 +312,8 @@ static int valid_ipv4(const char *s)
 
 static esp_err_t portal_save_handler(httpd_req_t *req)
 {
-    static char *keys[] = { "ssid", "password", "server_ip", "server_port", NULL };
-    char vals[4][64] = {{0}};
+    static char *keys[] = { "ssid", "password", "server_ip", NULL };
+    char vals[3][64] = {{0}};
 
     /* Read request body (form-encoded), bounded. Reserve one byte for the
        terminator: with `off < sizeof(body)` a full 1024-byte body left
@@ -323,7 +339,7 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
         const char *eq = strchr(tok, '=');
         if (!eq) continue;
         size_t klen = eq - tok;
-        for (int k = 0; k < 4; k++) {
+        for (int k = 0; k < 3; k++) {
             if (keys[k] && strlen(keys[k]) == klen && strncmp(tok, keys[k], klen) == 0) {
                 url_decode(eq + 1, vals[k], sizeof(vals[k]));
                 break;
@@ -347,15 +363,14 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     snprintf(node_cfg.ssid, sizeof(node_cfg.ssid), "%.32s", vals[0]);
     if (vals[1][0]) snprintf(node_cfg.password, sizeof(node_cfg.password), "%.63s", vals[1]);
     if (vals[2][0]) snprintf(node_cfg.server_ip, sizeof(node_cfg.server_ip), "%.15s", vals[2]);
-    if (vals[3][0]) node_cfg.server_port = (uint16_t)atoi(vals[3]);
     node_cfg.has_server = (vals[2][0] != 0) ? 1 : 0;
 
     if (cfg_save() != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs write failed");
         return ESP_OK;
     }
-    printf("cfg: saved via portal (SSID=%s server=%s:%u)\n",
-           node_cfg.ssid, node_cfg.server_ip, (unsigned)node_cfg.server_port);
+    printf("cfg: saved via portal (SSID=%s server=%s)\n",
+           node_cfg.ssid, node_cfg.server_ip);
 
     httpd_resp_sendstr(req, "Saved. Rebooting into STA mode...");
     vTaskDelay(pdMS_TO_TICKS(300));
@@ -813,7 +828,7 @@ void app_main(void)
     /* Load config; none in NVS (first boot / factory reset) -> zeroed cfg ->
        ssid empty -> setup AP (documented spec: first boot runs AudioNode-Setup) */
     if (cfg_load() != ESP_OK) {
-        printf("cfg: none in NVS (first boot / factory reset)\n");
+        printf("cfg: no usable config (first boot / factory reset / rejected blob)\n");
     }
     cfg_apply_server_whitelist();
 
