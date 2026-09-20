@@ -31,11 +31,11 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 8 | `volatile` flags not atomic | 🔲 valid (documentation-level) | F |
 | 9 | `ring_used()` called outside the mutex → stale `avail` | ⚠️ inaccurate — the mutex **is** held | — |
 | 10 | `tone_ms` is `static` in the pump | 🔲 valid (low) | D |
-| 11 | `strtok_r` non-idiomatic (`tok = save`) | 🔲 valid (cosmetic) | B |
+| 11 | `strtok_r` non-idiomatic (`tok = save`) | ✅ Done `P15` — for-loop, `NULL` on continuation | B ✅ |
 | 12 | NVS config struct has no version field | 🔲 valid | C |
 | 13 | `cfg_load` does not check the returned blob length | 🔲 valid | C |
-| 14 | `url_decode` calls `strlen` inside the loop (O(n²)) | 🔲 valid | B |
-| 15 | `server_ip` not validated at save | 🔲 valid | B |
+| 14 | `url_decode` calls `strlen` inside the loop (O(n²)) | ✅ Done `P15` — hoisted | B ✅ |
+| 15 | `server_ip` not validated at save | ✅ Done `P15` — strict dotted-quad + HTTP 400, nothing saved on failure (see E-13) | B ✅ |
 | 16 | `server_port` stored but unused / not independent of IP | 🔲 valid — **decision needed** | B |
 | 17 | Silence fill not capped by free ring space | 🔲 valid (mechanism differs — see E-4) | D |
 | 18 | `last_pkt_ms` is `uint32_t` ms | 🔲 valid (low — see E-5) | D |
@@ -47,15 +47,15 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 24 | `rssi_task` noisy in AP mode | ⚠️ inaccurate — it already prints nothing | — |
 | 25 | `%lu` for `uint32_t` in the UDP stats log | ❌ not a bug — the cast is explicit | — |
 | 26 | No socket timeout / heartbeat on `udp_task` | ✅ Done `P14` — non-blocking poll + 30 s idle heartbeat | A ✅ |
-| 27 | `char *html` pointing at a string literal | 🔲 valid (trivial) | B |
+| 27 | `char *html` pointing at a string literal | ✅ Done `P15` — `const char *` | B ✅ |
 | 28 | `setup_ap_start` leaks the `httpd_handle_t` | 🔲 valid (latent) | D |
 | 29 | `nvs_flash_erase()` while Wi-Fi is running | 🔲 valid | E |
 | 30 | `gain_clip` multiply can overflow `int32_t` | ❌ not reachable from any caller | — |
 | 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
 | 32 | `PIN_SD` driven HIGH before `i2s_init()` | 🔲 valid (low) | E |
 
-**Tally: 32 items → 8 done (5 pre-existing + #4/#5/#26 in Phase A) · 1 code-complete with HW
-verify pending (#23) · 14 valid remaining · 5 not defects · 3 rejected/deferred.**
+**Tally: 32 items → 12 done (5 pre-existing + 4 Phase A + 4 Phase B) · 1 code-complete with HW
+verify pending (#23) · 10 valid remaining · 5 not defects · 3 rejected/deferred.**
 
 ### What this review did *not* find
 The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
@@ -102,7 +102,9 @@ radio is software-disabled, enabling it needs elevation, and nothing else ever j
 setup AP. Evidence: `logs/2026-09-19_phaseA-diagnostics.md`; how to close it is in E-12.
 
 ### Phase B — portal input handling
-Items: **#15, #14, #27, #11, #16**
+Items: **#15, #14, #27, #11** (#16 re-slotted to Phase C — it changes `node_cfg_t`/the NVS
+blob, which is exactly what C's version field gates; the recorded decision is option (b),
+delete the field — nothing consumes it)
 - #15: `inet_pton`-validate `server_ip` before saving; on failure return HTTP 400 with a
   message instead of silently degrading to "accept any".
 - #14: hoist `strlen(src)` out of the `url_decode` loop.
@@ -116,6 +118,17 @@ Items: **#15, #14, #27, #11, #16**
 
 **Gate:** boot to the setup AP → POST an invalid IP → HTTP 400 with a clear message; POST
 a valid config → save → reboot → STA; re-provision round trip re-verified on hardware.
+
+**Status 2026-09-19 — IMPLEMENTED (`P15`).** All four items are in `main.c`. Logic gate:
+`tmp/verify_phaseB.py` ports the changed functions and runs 21 checks — strict validator
+accept/reject set (incl. the octet-255 trap, the `0NN` octal-lookalike trap, garbage
+characters, empty string), `url_decode` round trips, full form reassembly, and `strtok_r`
+iteration order — **21/21**; app selftest green. Hardware: flash `Hash of data verified`,
+boot → `GOT IP`, 40 s stream at **exactly 50.0 pps `dropped=0`** byte-exact, idle heartbeat
+intact, no panic, board stable after. The portal *wire* round-trip (POST → 400 / save →
+reboot → STA) is **pending hardware** — the dev PC has no usable second network interface
+(same blocker class as #23, see E-13/E-12); closing both is one phone join + form submit to
+`AudioNode-Setup`. Evidence: `logs/2026-09-19_phaseB-portal.md`.
 
 ### Phase C — NVS config versioning (prerequisite for #16)
 Items: **#12, #13**
@@ -251,3 +264,24 @@ applied."* The open-network profile for `AudioNode-Setup` was added successfully
 it takes one privileged step: enable the radio (or use a phone), put the board in setup-AP
 mode (hold BOOT 5 s), join the AP, and expect `ap: station <mac> joined (aid=1)` on join plus
 `ap: station <mac> left (aid=1)` on leave.
+
+**E-13 · Phase B implementation notes + gate honesty (2026-09-19).**
+- #15 uses a hand-rolled strict dotted-quad validator, not lwIP `inet_pton`: the IDF v6.1
+  source (`ip4_addr.c:165-173, 187-193`) shows `ip4addr_aton` accepts `0x`/octal bases,
+  `a.b.c` partial forms and trailing whitespace — laxer than POSIX `inet_pton`. Portal
+  validation must be STRICTER than the boot-time parser, so `0NN` octets are rejected too
+  ("09" is garbage to lwIP, "010" is octal 8): the saved string always parses back as plain
+  decimal. Validation runs BEFORE any NVS write — a bad IP can no longer land in NVS and
+  silently degrade the whitelist to accept-any at boot.
+- Gate honesty: the logic gate ran as a Python port of the three changed functions
+  (21/21, `tmp/verify_phaseB.py`) + app selftest; the *wire* gate (AP → POST invalid IP →
+  400 → valid → save → reboot → STA) is **pending hardware** — the dev PC has no usable
+  second netif (same blocker class as #23, E-12). Hardware-verified on the flashed Phase B
+  image: boot → `GOT IP`, 40 s stream at exactly 50.0 pps `dropped=0` byte-exact, idle
+  heartbeat intact, no panic, board stable after. One phone join + form submit closes both
+  wire items.
+- Tooling artifact worth remembering: opening the monitor can reset the board despite
+  `--no-reset` (observed twice: boot lines at t≈1.2 s after attach; uptime-derived stream
+  stats confirmed fresh boots). This makes cumulative `pkts=` counters APPEAR to go
+  backwards between captures and hid early boot lines in two runs. Batch a whole gate into
+  ONE capture that attaches before the action.

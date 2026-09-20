@@ -225,7 +225,7 @@ static esp_err_t sta_mode_start(void)
 /* ── P2: Setup AP + captive portal ─────────────────────────────── */
 static esp_err_t portal_get_handler(httpd_req_t *req)
 {
-    char *html =
+    const char *html =
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<title>AudioNode Setup</title>"
@@ -249,8 +249,9 @@ static esp_err_t portal_get_handler(httpd_req_t *req)
 static size_t url_decode(const char *src, char *out, size_t max)
 {
     size_t o = 0;
+    size_t src_len = strlen(src);   /* hoisted: was recomputed per iteration (O(n^2)) */
     for (size_t i = 0; src[i] && o < max - 1; i++) {
-        if (src[i] == '%' && i + 2 < strlen(src)) {
+        if (src[i] == '%' && i + 2 < src_len) {
             int hi = isxdigit(src[i+1]) ? (isdigit(src[i+1]) ? src[i+1]-'0' :
                   (src[i+1]|0x20)-'a'+10) : 0;
             int lo = isxdigit(src[i+2]) ? (isdigit(src[i+2]) ? src[i+2]-'0' :
@@ -265,6 +266,32 @@ static size_t url_decode(const char *src, char *out, size_t max)
     }
     out[o] = '\0';
     return o;
+}
+
+/* #15: strict dotted-quad check for the portal's server_ip field.
+   lwIP's inet_pton is lax (ip4addr_aton also accepts partial and hex forms),
+   so user input is validated here — where feedback is possible — and must be
+   STRICTER than the boot-time parse in cfg_apply_server_whitelist. */
+static int valid_ipv4(const char *s)
+{
+    unsigned v[4] = {0, 0, 0, 0};
+    int n_octets = 0, digits = 0;
+    for (; *s; s++) {
+        if (*s >= '0' && *s <= '9') {
+            if (digits == 1 && v[n_octets] == 0) return 0;  /* "0NN": lwIP would
+                                            read it as octal, "09" as garbage */
+            v[n_octets] = v[n_octets] * 10 + (unsigned)(*s - '0');
+            if (v[n_octets] > 255) return 0;
+            if (++digits > 3) return 0;         /* max 3 digits per octet */
+        } else if (*s == '.') {
+            if (digits == 0) return 0;          /* ".." or leading '.' */
+            if (++n_octets > 3) return 0;       /* more than 4 octets */
+            digits = 0;
+        } else {
+            return 0;                           /* anything non [0-9.] */
+        }
+    }
+    return n_octets == 3 && digits > 0;
 }
 
 static esp_err_t portal_save_handler(httpd_req_t *req)
@@ -288,9 +315,11 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     }
     body[off] = '\0';
 
-    /* Split on '&', decode each known k=v. */
-    char *tok = body, *save = NULL;
-    while ((tok = strtok_r(tok, "&", &save)) != NULL) {
+    /* Split on '&', decode each known k=v (idiomatic strtok_r: first call
+       takes the string, every following call takes NULL). */
+    char *save = NULL;
+    for (char *tok = strtok_r(body, "&", &save); tok != NULL;
+         tok = strtok_r(NULL, "&", &save)) {
         const char *eq = strchr(tok, '=');
         if (!eq) continue;
         size_t klen = eq - tok;
@@ -300,11 +329,19 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
                 break;
             }
         }
-        tok = save;
     }
 
     if (!vals[0][0]) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing ssid");
+        return ESP_OK;
+    }
+    /* #15: reject a malformed server_ip with a 400 BEFORE anything is saved
+       (previously it saved fine and then silently degraded to accept-any at
+       boot, when cfg_apply_server_whitelist's inet_pton failed). */
+    if (vals[2][0] && !valid_ipv4(vals[2])) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "server IP is not a valid IPv4 address "
+                            "(e.g. 192.168.1.100); nothing was saved");
         return ESP_OK;
     }
     snprintf(node_cfg.ssid, sizeof(node_cfg.ssid), "%.32s", vals[0]);
