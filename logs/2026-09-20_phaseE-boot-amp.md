@@ -15,7 +15,7 @@
 
 ## Gates on hardware
 - **30 s stream regression (post-reorder boot)**: sender 1500 frames / 30.0 s → board
-  `pkts=1452 dropped=0 total=2787840` = **1452 × 1920 byte-exact**, ring 14.6 KB, heartbeat
+  `pkts=1452 dropped=0 total=2839680` = **1452 × 1920 byte-exact**, ring 14.6 KB, heartbeat
   resumed. Amp path alive after the reorder.
 - **Factory reset with a capture already running** (user held BOOT ~5 s):
 ```
@@ -28,7 +28,7 @@ setup ap: running 'AudioNode-Setup' open AP, portal http://192.168.4.1/
   **Zero NVS errors, zero panic/watchdog/abort markers** in the whole capture (a second
   brief BOOT press during AP mode printed "BOOT held" and was released early — no erase,
   as designed).
-- **Re-provision round trip, live-fire of Phase B/C code**:
+- **Re-provision round trip, live-fire of Phase B/C code (later, after wrong-pw → reason 15 → re-provision)**:
 ```
 ap: station a4:c3:f0:3c:f1:7c joined (aid=1)
 cfg: saved via portal (SSID=<ssid> server=<pc-ip>)      <- #16 format, #15-validated IP

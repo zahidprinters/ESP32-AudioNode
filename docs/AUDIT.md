@@ -371,6 +371,22 @@ Both checks together: `len == sizeof(node_cfg) && version == CFG_VERSION`.
   behaviour; the board itself showed zero panic/watchdog/reset markers across every
   Phase D capture.
 
+*
+   *E-18 · Wrong-password diagnosis, closed live 2026-09-20.** The user set a wrong WiFi
+   password on the board and the full reason-15 path fired (captured in the session's live
+   serial log — see `logs/<file>`). Sequence on record: STA fails to associate → `WIFI
+   DISCONNECTED: reason=15, retrying...` (was previously discarded as just "wifi
+   disconnected, retrying..."); WARN `Haven't to connect to a suitable AP now!` → after 30 s
+   with no IP the failover fires `failover: no IP in 30000 ms, opening setup AP (NVS
+   kept)` → the user re-provisions via the portal with the correct credentials → `cfg: saved
+   ... server=192.168.100.12` → `STA: joining` → `GOT IP` → streaming byte-exact with
+   dropped=0. This is exactly the causal chain #2/#3/#5/#22 were added to make visible,
+   and #4/#23/#26 extend it — before them a wrong password produced only a silent retry;
+   now the reason code, the failover, the rejoin, and the SSID all print. Record also:
+   the ## Portal information block was updated to **(figure out the silent-close — fix
+   later)** so it stays honest about what is and isn't yet closed. This item also doubles
+   as the long-hanging hardware closure of E-12 (this machine's own Wi-Fi radio is now the
+   portal client that produced the join/leave lines on record).
 **E-16 · Phase E notes + the closure cascade (2026-09-20).**
 - The full factory-reset/re-provision cycle landed on record because a long-running
   background capture was started BEFORE the user touched the button — that is also how
