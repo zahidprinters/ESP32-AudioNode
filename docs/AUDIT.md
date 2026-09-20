@@ -26,19 +26,19 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 3 | `IP_EVENT_STA_LOST_IP` never registered | ✅ Fixed — `6844401` | — |
 | 4 | `udp_task` bind failure exits silently | ✅ Done `P14` — `socket()` and `bind()` both retry | A ✅ |
 | 5 | `esp_wifi_connect()` return ignored in `STA_START` | ✅ Done `P14` — rc + `esp_err_to_name()` logged | A ✅ |
-| 6 | `failover_task` timer not reset while `ap_active` | 🔲 valid (latent — see E-2) | D |
+| 6 | `failover_task` timer not reset while `ap_active` | ✅ Done `P17` — `sta_start` reset in the branch (inert today, E-2) | D ✅ |
 | 7 | `udp_task` launched before Wi-Fi is up | ⚠️ not a defect — proven on hardware | — |
 | 8 | `volatile` flags not atomic | 🔲 valid (documentation-level) | F |
 | 9 | `ring_used()` called outside the mutex → stale `avail` | ⚠️ inaccurate — the mutex **is** held | — |
-| 10 | `tone_ms` is `static` in the pump | 🔲 valid (low) | D |
+| 10 | `tone_ms` is `static` in the pump | ✅ Done `P17` — task-scope init + stale `tcp_task` comment fixed | D ✅ |
 | 11 | `strtok_r` non-idiomatic (`tok = save`) | ✅ Done `P15` — for-loop, `NULL` on continuation | B ✅ |
 | 12 | NVS config struct has no version field | ✅ Done `P16` — `uint8_t version` (`CFG_VERSION 2`), mismatch → config ignored | C ✅ |
 | 13 | `cfg_load` does not check the returned blob length | ✅ Done `P16` — requires exact len AND version (see E-14) | C ✅ |
 | 14 | `url_decode` calls `strlen` inside the loop (O(n²)) | ✅ Done `P15` — hoisted | B ✅ |
 | 15 | `server_ip` not validated at save | ✅ Done `P15` — strict dotted-quad + HTTP 400, nothing saved on failure (see E-13) | B ✅ |
 | 16 | `server_port` stored but unused / not independent of IP | ✅ Done `P16` — field, form input and handler copy deleted (decision (b)) | C ✅ |
-| 17 | Silence fill not capped by free ring space | 🔲 valid (mechanism differs — see E-4) | D |
-| 18 | `last_pkt_ms` is `uint32_t` ms | 🔲 valid (low — see E-5) | D |
+| 17 | Silence fill not capped by free ring space | ✅ Done `P17` — capped by `ring_free()/FRAME_BYTES` under the mutex (mechanism was E-4) | D ✅ |
+| 18 | `last_pkt_ms` is `uint32_t` ms | ❌ rejected (`P17`) — `int64_t` would ADD a torn-read race; the `uint32_t` pattern is atomic and wrap-correct (E-15) | — |
 | 19 | HTTP body read 1 byte at a time | ✅ Fixed — `6844401` | — |
 | 20 | Ring mutex held during `memcpy` → use a lock-free ring | ❌ deferred — needs a measurement first | F |
 | 21 | `audio_pump_task` calls `ring_used()` with a mutex drop | ⚠️ inaccurate — same as #9 | — |
@@ -48,14 +48,14 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 25 | `%lu` for `uint32_t` in the UDP stats log | ❌ not a bug — the cast is explicit | — |
 | 26 | No socket timeout / heartbeat on `udp_task` | ✅ Done `P14` — non-blocking poll + 30 s idle heartbeat | A ✅ |
 | 27 | `char *html` pointing at a string literal | ✅ Done `P15` — `const char *` | B ✅ |
-| 28 | `setup_ap_start` leaks the `httpd_handle_t` | 🔲 valid (latent) | D |
+| 28 | `setup_ap_start` leaks the `httpd_handle_t` | ✅ Done `P17` — static `hd` + `httpd_stop` guard (inert today, single call) | D ✅ |
 | 29 | `nvs_flash_erase()` while Wi-Fi is running | 🔲 valid | E |
 | 30 | `gain_clip` multiply can overflow `int32_t` | ❌ not reachable from any caller | — |
 | 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
 | 32 | `PIN_SD` driven HIGH before `i2s_init()` | 🔲 valid (low) | E |
 
-**Tally (recounted from the table): 32 items → 15 done · 1 code-complete with HW verify
-pending (#23) · 8 valid remaining · 5 not defects · 3 rejected/deferred.**
+**Tally (recounted from the table): 32 items → 19 done · 1 code-complete with HW verify
+pending (#23) · 3 valid remaining · 5 not defects · 4 rejected/deferred.**
 
 ### What this review did *not* find
 The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
@@ -163,7 +163,7 @@ the silent-garbage failure mode #12 exists to catch, demonstrated live →
 verifies in that same re-provision session. Evidence: `logs/2026-09-20_phaseC-nvs.md`.
 
 ### Phase D — stream, timer and handle hygiene
-Items: **#17, #10, #6, #28, #18**
+Items: **#17, #10, #6, #28** — **#18 rejected** (see E-15)
 - #17: cap silence fill at `ring_free() / FRAME_BYTES` frames. **There is no overflow**
   (`ring_write` returns partial when full), but up to 64 × 1920 = 122 KB of silence can
   saturate the 256 KB ring, so the real PCM written on the next line gets 0 bytes and
@@ -178,6 +178,24 @@ Items: **#17, #10, #6, #28, #18**
 
 **Gate:** 60 s tone `dropped=0` byte-exact; kill the sender mid-stream and restart it →
 audio recovers, ring never saturates; failover→AP re-verified.
+
+**Status 2026-09-20 — IMPLEMENTED (`P17`), #18 rejected.** #17: silence fill is capped by
+`ring_free() / FRAME_BYTES` (read under the mutex), so a worst-case 64-frame gap can never
+crowd the real packet out of the ring; #10: `tone_ms` moved to task scope with explicit
+init and the stale `tcp_task` comment corrected (`udp_task` sets `play_mode`); #6: the
+failover timer now resets in the `ap_active` branch (inert today per E-2); #28: `hd` is
+static and `httpd_stop()` runs before any restart (inert today — single call).
+**#18 REJECTED**: `last_pkt_ms` is written by `udp_task` and read by `led_task`; on Xtensa
+a 32-bit aligned access is atomic, a 64-bit one is two halves with no guarantee — the
+conversion would replace a wrap-correct single-word-atomic pattern with a torn-read race
+(E-15). Gate on hardware (flashed image): 60 s tone → 3000 sent, **2984 accepted,
+`total=5729280` byte-exact**, 50.0 pps throughout, ring 44–47 KB (never saturated), 0.5%
+air loss; kill mid-stream (sender dead at 650/13.0 s) → restart → board re-accepted at
+**exactly 50 pps** (`pkts=944→1194`, `dropped=3`, ring 8–12 KB), sender2 750/15.0 s, zero
+panic/watchdog/reset markers across all captures. **Failover→AP re-verify deferred** —
+needs a portal cycle with the user-held Wi-Fi password; #6 is inert today (E-2) and the
+failover path itself was hardware-verified 2026-09-14 (P6). Evidence:
+`logs/2026-09-20_phaseD-hygiene.md`.
 
 ### Phase E — boot & amp hygiene
 Items: **#32, #29**
@@ -310,4 +328,20 @@ structs happened to differ in size here (114 vs 115 — actual compiler layout),
 board the length check alone would already have rejected the old blob; the version byte is
 still required for the general case (a same-size reshuffle would pass a length-only check).
 Both checks together: `len == sizeof(node_cfg) && version == CFG_VERSION`.
+
+**E-15 · Phase D notes (2026-09-20).**
+- #18 rejected on atomicity grounds: `last_pkt_ms` is written by `udp_task` and read by
+  `led_task`. On Xtensa (ESP32-S3) an aligned 32-bit load/store is atomic; a 64-bit access
+  is two 32-bit halves with no cross-half guarantee. The current
+  `(uint32_t)(now_ms) - lp < 200` pattern is single-word atomic AND wrap-correct
+  (unsigned arithmetic, ~49-day period) — converting to bare `int64_t` would trade a
+  non-issue for a real (benign, self-correcting within one 30 ms LED frame) torn-read
+  race. If a 49-day uptime ever matters, the honest fix is a seqlock or a short critical
+  section, not the bare conversion the review suggested.
+- Tooling artifact (extends E-13): killing the monitor's python (taskkill) pulses
+  DTR/RTS on port release and the capture script relaunches — file tails can show a boot
+  with no `rst:` banner, and an attach reset can fire mid-stream (lifetime totals then
+  restart). Always cross-check counters for continuity before reading them as firmware
+  behaviour; the board itself showed zero panic/watchdog/reset markers across every
+  Phase D capture.
 

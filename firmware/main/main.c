@@ -404,10 +404,14 @@ static void setup_ap_start(void)
     dns.ip = (esp_ip_addr_t)ESP_IP4ADDR_INIT(192, 168, 4, 1);   /* captive dns */
     esp_netif_set_dns_info(ap_if, ESP_NETIF_DNS_MAIN, &dns);
 
-    /* Captive portal: HTTP server on :80 */
-    httpd_handle_t hd = NULL;
+    /* Captive portal: HTTP server on :80. Static handle + stop-first (#28): if
+       this ever runs twice in one boot (future AP-restart logic), the old
+       server would leak its task and sockets. Inert today (single call). */
+    static httpd_handle_t hd = NULL;
+    if (hd) httpd_stop(hd);
     httpd_config_t hcfg = HTTPD_DEFAULT_CONFIG();
     if (httpd_start(&hd, &hcfg) != ESP_OK) {
+        hd = NULL;
         printf("setup ap: httpd failed\n");
     } else {
         httpd_uri_t get_uri  = { .uri = "/", .method = HTTP_GET,  .handler = portal_get_handler };
@@ -424,7 +428,9 @@ static void failover_task(void *arg)
     int64_t sta_start = 0;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
-        if (ap_active) continue;               /* already in setup AP */
+        if (ap_active) { sta_start = 0; continue; }  /* #6: already in setup AP — never
+                                                        carry a stale timer into a future
+                                                        STA attempt */
         if (net_state >= 1) { sta_start = 0; continue; }  /* got IP, all good */
         if (sta_start == 0) sta_start = esp_timer_get_time();   /* us */
         if (esp_timer_get_time() - sta_start > (int64_t)STA_FAIL_TIMEOUT_MS * 1000) {
@@ -522,6 +528,8 @@ void audio_pump_task(void *arg)
     int n = 0;
     int err_printed = 0;
     size_t written = 0;
+    static int tone_ms = 0;   /* #10: owned by the task, initialised at start — not a
+                                 loop-local static that would outlive a restart */
     while (1) {
         int mode = play_mode;
         int frames = 0;
@@ -533,9 +541,8 @@ void audio_pump_task(void *arg)
                 n++;
             }
             frames = 1024;
-            /* power-on tone limited to ~2s (user request), then silence
-               until the stream connects. tcp_task switches back to mode 1. */
-            static int tone_ms = 0;
+            /* power-on tone limited to ~2s (user request), then silence until a
+               stream arrives: udp_task sets play_mode = 1 on the first packet. */
             tone_ms += 1024 * 1000 / SAMPLE_RATE;   /* 21.3ms per chunk */
             if (tone_ms >= 2000 && play_mode == 0) play_mode = 2;
         } else if (mode == 1) {
@@ -743,9 +750,16 @@ static void udp_task(void *arg)
                 uint16_t gap = (seq - expected) & 0xFFFF;
                 if (gap > 64) gap = 1;  /* cap runaway gap */
                 dropped += gap;
-                /* fill missing frames with silence */
+                /* Fill missing frames with silence, capped by the ring's free
+                   space (#17): the 64-frame worst case is 122 KB and would
+                   saturate the ring so the REAL packet written next gets 0
+                   bytes. ring_write() already returns partial when full — the
+                   cap keeps the fill from ever being why a live packet is lost. */
                 uint8_t silence[FRAME_BYTES];
                 memset(silence, 0, FRAME_BYTES);
+                xSemaphoreTake(ring_mutex, portMAX_DELAY);
+                if (gap > ring_free() / FRAME_BYTES) gap = ring_free() / FRAME_BYTES;
+                xSemaphoreGive(ring_mutex);
                 for (uint16_t g = 0; g < gap; g++) {
                     (void)ring_write(silence, FRAME_BYTES);
                 }
