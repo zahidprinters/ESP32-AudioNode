@@ -44,3 +44,23 @@ against; the rejection did not panic, did not half-apply, and fell back to a cle
   save→load round trip. Steps: PROJECT_STATE §11 item 13.
 - Factory-reset path unchanged (`nvs_flash_erase` on BOOT hold); not re-run today since the
   board is already unprovisioned (same code path as first-boot, which the gate exercised).
+
+## Re-provision done (2026-09-20 evening) — Phase C round trip CLOSED
+User provisioned via `192.168.4.1` (from this PC's own Wi-Fi — the adapter took a DHCP
+lease at 192.168.4.2 from the board's AP, so the "no second netif" blocker is gone for any
+future portal session). Post-provision boot capture:
+```
+cfg: server whitelist <pc-ip>        <- v2 blob loaded, no rejection line
+STA: joining <ssid>
+GOT IP: <board-ip>
+```
+Streaming regression on the flashed image (whitelist active, source = provisioned server IP):
+- run 1: sender 1250 frames / 25.0 s (50.0 fps) → board `pkts=1154 dropped=76`,
+  total 2215680 = 1154 × 1920 **byte-exact**
+- run 2: sender 1000 frames / 20.0 s → board `pkts=979 dropped=21`, total 1879680 **byte-exact**
+2-6% air loss today (seq-gap silence-fill handled it; rssi dipping to -63) vs 0% in the
+Phase B session on the identical RX path — environmental, not code. Still open, needs the
+board in setup-AP mode again (whenever that naturally happens): (#23) capture the
+`ap: station joined/left` lines (the provisioning join happened before a capture was
+attached) and (B) the bad-IP → HTTP 400 wire test.
+
