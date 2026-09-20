@@ -28,7 +28,7 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 5 | `esp_wifi_connect()` return ignored in `STA_START` | ✅ Done `P14` — rc + `esp_err_to_name()` logged | A ✅ |
 | 6 | `failover_task` timer not reset while `ap_active` | ✅ Done `P17` — `sta_start` reset in the branch (inert today, E-2) | D ✅ |
 | 7 | `udp_task` launched before Wi-Fi is up | ⚠️ not a defect — proven on hardware | — |
-| 8 | `volatile` flags not atomic | 🔲 valid (documentation-level) | F |
+| 8 | `volatile` flags not atomic | ✅ Done `P19` — Xtensa single-word-atomicity assumption documented at the flag clusters (E-15) | F ✅ |
 | 9 | `ring_used()` called outside the mutex → stale `avail` | ⚠️ inaccurate — the mutex **is** held | — |
 | 10 | `tone_ms` is `static` in the pump | ✅ Done `P17` — task-scope init + stale `tcp_task` comment fixed | D ✅ |
 | 11 | `strtok_r` non-idiomatic (`tok = save`) | ✅ Done `P15` — for-loop, `NULL` on continuation | B ✅ |
@@ -40,12 +40,12 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 17 | Silence fill not capped by free ring space | ✅ Done `P17` — capped by `ring_free()/FRAME_BYTES` under the mutex (mechanism was E-4) | D ✅ |
 | 18 | `last_pkt_ms` is `uint32_t` ms | ❌ rejected (`P17`) — `int64_t` would ADD a torn-read race; the `uint32_t` pattern is atomic and wrap-correct (E-15) | — |
 | 19 | HTTP body read 1 byte at a time | ✅ Fixed — `6844401` | — |
-| 20 | Ring mutex held during `memcpy` → use a lock-free ring | ❌ deferred — needs a measurement first | F |
+| 20 | Ring mutex held during `memcpy` → use a lock-free ring | ❌ stays deferred — no measurement justifies the rewrite (F closed 2026-09-20) | F |
 | 21 | `audio_pump_task` calls `ring_used()` with a mutex drop | ⚠️ inaccurate — same as #9 | — |
 | 22 | No SSID logged at connect time | ✅ already present (`STA: joining %s`) | — |
 | 23 | No log when a client joins/leaves the setup AP | ✅ Done `P14` code — **HW verified `P18`**: join AND leave lines captured live | A ✅ |
 | 24 | `rssi_task` noisy in AP mode | ⚠️ inaccurate — it already prints nothing | — |
-| 25 | `%lu` for `uint32_t` in the UDP stats log | ❌ not a bug — the cast is explicit | — |
+| 25 | `%lu` for `uint32_t` in the UDP stats log | ✅ Done `P19` — `PRIu32`/`PRIu64`, casts gone (was correct before; tidier now) | F ✅ |
 | 26 | No socket timeout / heartbeat on `udp_task` | ✅ Done `P14` — non-blocking poll + 30 s idle heartbeat | A ✅ |
 | 27 | `char *html` pointing at a string literal | ✅ Done `P15` — `const char *` | B ✅ |
 | 28 | `setup_ap_start` leaks the `httpd_handle_t` | ✅ Done `P17` — static `hd` + `httpd_stop` guard (inert today, single call) | D ✅ |
@@ -54,8 +54,8 @@ Register opened: **2026-09-19**. Reviewed revision: `6844401` (`firmware/main/ma
 | 31 | No flush/drain before `esp_restart()` | ⚠️ already handled — both paths delay first | — |
 | 32 | `PIN_SD` driven HIGH before `i2s_init()` | ✅ Done `P18` — SD driven HIGH after `i2s_init()` | E ✅ |
 
-**Tally (recounted from the table): 32 items → 22 done · 1 valid remaining · 5 not defects ·
-4 rejected/deferred.**
+**Tally (recounted from the table): 32 items → 24 done · 0 valid remaining · 5 not defects ·
+3 rejected/deferred — audit fully resolved.**
 
 ### What this review did *not* find
 The review claims to explain the reported "no IP shown / no serial logs" symptom. It does
@@ -231,6 +231,17 @@ Items: **#8, #20, #25**
   `pump_chunks` rate during a long stream). One producer at 50 Hz and one consumer at
   ~47 Hz sharing a 1920-byte `memcpy` is not a demonstrated bottleneck.
 - #25: `PRIu32` instead of `(unsigned long)` casts — cosmetic; the current code is correct.
+
+**Status 2026-09-20 — DONE (`P19`); the 32-item audit is fully resolved.** #8: the
+atomicity assumption is now documented at both flag clusters in `main.c` (Xtensa aligned
+32-bit = single-word atomic; `_Atomic`/critical sections if ever ported off Xtensa; 64-bit
+handoffs already unsafe — the #18 corollary, E-15). #25: both UDP log lines use
+`PRIu32`/`PRIu64` with the casts gone — verified live on hardware (heartbeat prints sane
+numbers: `pkts=721 dropped=19 total=1384320` = byte-exact). Binary size unchanged
+(`0xdc750` — #8 is comment-only). **#20 stays deferred**: no measurement justifies
+rewriting the timing-critical path (ring steady at 8–47 KB across every session, 50 pps,
+zero stalls). Final accounting: **24 done · 5 not defects · 3 rejected/deferred
+(#20, #30, #18) · 0 open.**
 
 ---
 

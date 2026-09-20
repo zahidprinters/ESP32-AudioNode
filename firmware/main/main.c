@@ -25,6 +25,7 @@
 #include "esp_system.h"
 #include "esp_mac.h"      /* MACSTR / MAC2STR for the setup-AP station logs */
 #include <stdlib.h>
+#include <inttypes.h>     /* PRIu32/PRIu64 in the UDP stats logs (#25) */
 
 /* P1: RTP L16 over UDP — 48 kHz, 16-bit, mono, 20 ms frames (960 samples / 1920 bytes) */
 #define UDP_PORT     1234
@@ -42,6 +43,13 @@ static uint32_t configured_server_ip = 0;
 static uint8_t *ring_buf = NULL;
 static volatile int ring_head = 0, ring_tail = 0;   /* head=write, tail=read */
 static SemaphoreHandle_t ring_mutex;
+/* #8: the `volatile` flags in this file (play_mode, net_state, last_pkt_ms,
+   vu_level, pump_chunks, ring_head/tail, cfg_loaded, ap_active) hand off
+   single values between tasks with no lock. That is safe because on Xtensa
+   (ESP32-S3) an ALIGNED 32-bit — or narrower — load/store is single-word
+   atomic (see also E-15). If this code is ever ported off Xtensa, the
+   guarantee must be re-established explicitly (_Atomic or a critical
+   section); a 64-bit handoff would ALREADY be unsafe here. */
 static volatile int play_mode = 0;  /* 0=tone, 1=stream, 2=silence */
 static volatile uint32_t pump_chunks = 0;  /* diag: pump loop iterations */
 
@@ -90,6 +98,8 @@ static int ring_read(uint8_t *dst, int len)
 
 /* LED state: RGB shows connection state when idle, audio VU when streaming */
 static led_strip_handle_t rgb_led = NULL;
+/* net_state / last_pkt_ms / vu_level: same Xtensa single-word-atomicity
+   assumption as the flags documented above the ring globals (#8). */
 static volatile uint8_t vu_level = 0;    /* smoothed audio level 0..255 */
 static volatile int net_state = 0;       /* 0=wifi down, 1=waiting, 2=streaming */
 static volatile uint32_t last_pkt_ms = 0;/* last accepted RTP packet (ms), for live-stream detect */
@@ -706,11 +716,10 @@ static void udp_task(void *arg)
                 /* no datagram ready: the normal state between streams */
                 if (!idle_reported &&
                     esp_timer_get_time() - last_rx_us >= 30LL * 1000 * 1000) {
-                    printf("udp: idle %lld s, pkts=%lu dropped=%lu total=%llu bytes"
-                           " (listening on :%d)\n",
+                    printf("udp: idle %lld s, pkts=%" PRIu32 " dropped=%" PRIu32
+                           " total=%" PRIu64 " bytes (listening on :%d)\n",
                            (long long)((esp_timer_get_time() - last_rx_us) / 1000000),
-                           (unsigned long)pkts, (unsigned long)dropped,
-                           (unsigned long long)total, UDP_PORT);
+                           pkts, dropped, total, UDP_PORT);
                     idle_reported = 1;
                 }
                 /* 1 tick = 10 ms at CONFIG_FREERTOS_HZ=100, so this polls ~100x/s
@@ -784,9 +793,9 @@ static void udp_task(void *arg)
 
         int64_t now = esp_timer_get_time();
         if (now - last_log > 5000000) {
-            printf("udp: pkts=%lu dropped=%lu ring=%d pcm=%llu bytes (t=%lld ms)\n",
-                   (unsigned long)pkts, (unsigned long)dropped, ring_used(),
-                   (unsigned long long)total, (long long)(now / 1000));
+            printf("udp: pkts=%" PRIu32 " dropped=%" PRIu32 " ring=%d pcm=%" PRIu64
+                   " bytes (t=%lld ms)\n",
+                   pkts, dropped, ring_used(), total, (long long)(now / 1000));
             last_log = now;
         }
     }
