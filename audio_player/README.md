@@ -28,6 +28,15 @@ python -m audio_player.app                      # UI at http://localhost:5000
 audio-player                                    # same, when installed
 ```
 
+> **Werkzeug note (2026-09-21):** the app runs Flask-SocketIO's bundled Werkzeug
+> development server as the LAN dev UI. Newer Flask-SocketIO rejects that by
+> default with `RuntimeError: The Werkzeug web server is not designed to run in
+> production…`. The app already passes `allow_unsafe_werkzeug=True` in `main()`
+> so it starts without changes. This is the trusted-LAN dev server described in
+> the README — **not** a production deployment. For real use behind other tools,
+> run a production WSGI server (e.g. gunicorn) in front; do not rely on the
+> in-app server outside a trusted network.
+
 | Flag | Meaning |
 |---|---|
 | `--host` | HTTP bind address (default from `config.py`) |
@@ -40,6 +49,12 @@ Example — one board, a specific folder:
 ```bash
 python -m audio_player.app --library "D:\Music" --node 192.168.1.50:1234
 ```
+
+The address must be the **real, current LAN IP of the PC running the app** —
+add the board's IP on its side via the setup portal (see
+[`firmware/README.md`](../firmware/README.md)). The example node
+`192.168.1.50` is illustrative; use your own. Discovery is a convenience; the
+manual IP entry is the supported fallback.
 
 ## Module map
 
@@ -113,20 +128,12 @@ verifies position survives pipeline restarts, validates the EQ chain invariants
 (limiter last, clamping, preset round-trip), and checks that every element id
 referenced by `app.js` exists in `index.html`.
 
-## Known limitations
+## Windows package / installer (planned)
 
-- MP3 seek is ffmpeg-dependent, not sample-accurate.
-- Volume / EQ / seek changes restart the pipeline, which produces an audible
-  tick while playing.
-- The position update loop runs at 250 ms, so the seek bar is coarse.
-- The UI shell is fixed-width for a single page; it stacks on narrow screens.
+See **docs/WINDOWS_INSTALLER.md** for the plan: Windows Service wrapper (NSSM),
+pre-built firmware BIN for this board, Inno Setup installer EXE, in-app flash panel,
+offline first, browser UI as the frontend, future macOS/Linux packaging + other boards
+documented.
 
-## Component history
-
-Feature-by-feature history lives in the root [`CHANGELOG.md`](../CHANGELOG.md)
-(one canonical changelog for the whole project). Verification runs are recorded
-under [`logs/`](../logs/).
-
-## License
-
-MIT — see the root [`LICENSE`](../LICENSE).
+The package is planned, not started. The verified app core is the untouched baseline;
+packaging phases will build on an installed-app verification (Ph1) before anything else.

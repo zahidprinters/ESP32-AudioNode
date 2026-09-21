@@ -8,6 +8,7 @@
 
 ## 1. WHERE WE ARE (current focus)
 - Phase: **RTP/UDP product phase** — transitioning the verified TCP audio path to a product-grade WiFi speaker box
+- **WIP (uncommitted, compile-only — no board in sandbox)**: setup portal gained `node_name` + `server_port` (wired to `udp_task` `bind()`, default-preserving 0/blank→1234) + a `/debug` JSON route; resolved the build-break (uncommitted `register_debug_route(hd)` had no definition → `implicit declaration`); `CFG_VERSION` 2→3 (→ one re-provision via setup AP on flash). See §11 #15.
 - Production build (verified flashing): DMA-backpressure pump, PSRAM ring buffer, ×2 gain, RGB LED VU/states, 2s boot tone
 - Audio pipeline preserved, transport changed TCP → **RTP L16 over UDP** (48 kHz, 16-bit, mono, 20 ms frames, PT=96, seq+1/frame, ts+960/frame samples)
 - **P1 RTP receiver now VERIFIED on hardware (2026-09-13)**: 30 s stream, 1272+ pkts, **dropped=0** — root cause of earlier silence was disabled IP reassembly (see §4)
@@ -214,6 +215,7 @@
 12. 🔲 V2 candidates: node back-channel (board → server status packet), MP3/AAC RTP depacketizer on the board, playlist/next-track, `threading` async mode to drop the eventlet deprecation
 13. ✅ Portal + AP-join round trip — VERIFIED 2026-09-20 during P18 (#23 join/leave lines live; portal save → reboot → STA → GOT IP; v2 round trip). Remaining: the bad-IP → HTTP 400 test (next natural portal session)
 14. 🔲 Commit each verified milestone only
+15. 🔲 Portal: add `node_name` + `server_port` (wired to `udp_task` bind(), default-preserving 0/blank→1234) + `/debug` JSON route — **COMPILE-verified only** in sandbox (`idf.py build`: `Project build complete`, EXIT=0, `audio_node.bin` 0xdcc00; build log `logs/2026-09-21_portal-build.md`). `CFG_VERSION` 2→3 → existing boards re-provision once via the setup AP. Fixed the build-break (undefined `register_debug_route`). Pin config = **read-only pinout row in portal** (I2S pins fixed; not NVS-mutable without HW verify). **HW-pending** — no board here to flash/ear-test; left UNCOMMITTED for the bench gate per the commit rules.
 
 **Audit backlog (from `docs/AUDIT.md`): AUDIT COMPLETE — all 32 items resolved (24 done ·
 5 not defects · 3 rejected/deferred). No firmware phases remain.** Optional leftovers only:

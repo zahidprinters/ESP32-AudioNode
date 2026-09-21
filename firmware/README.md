@@ -52,11 +52,42 @@ Notes:
 1. Power on with no stored credential → the board starts the **open** setup AP
    `AudioNode-Setup`.
 2. Connect to it and open <http://192.168.4.1/>.
-3. Enter Wi-Fi SSID/password plus the **server IP and port** (the PC running
-   `audio_player`), then save.
-4. The board stores the blob in NVS, joins the network and listens on UDP 1234.
-   If it cannot connect within ~30 s it returns to the setup AP; the stored
-   configuration is kept.
+   | Portal field | Stored as (NVS `node_cfg_t`) | Notes |
+   |---|---|---|
+   | Wi-Fi SSID | `ssid` | |
+   | Wi-Fi password | `password` | |
+   | Server IP (sending PC) | `server_ip` (+`has_server`) | source-IP whitelist for incoming datagrams |
+   | Server port | `server_port` | the UDP listen port; blank/0 → **1234**. Validated 1–65535 before save. |
+   | Node name | `node_name` | optional label, shown in the boot log and at `/debug`. |
+
+   On save the board stores the blob in NVS, joins the network and listens on the
+   configured UDP port (1234 by default). If it cannot connect within ~30 s it
+   returns to the setup AP; the stored configuration is kept.
+
+### Debug route
+
+While the setup AP is up (no STA yet, or Wi-Fi down), the board serves
+<http://192.168.4.1/debug> — a JSON snapshot of live state: `version`, `ssid`,
+`server_ip`, `has_server`, `server_port`, `node_name`, `net_state`, `play_mode`,
+`ring_used`, `ap_active`. Useful for sanity-checking that a save was applied
+without needing serial.
+
+### Pinout — fixed, not configurable
+
+The hardware pinout is **hardcoded** in `main.c` (`#define`s) and is **not**
+exposed through the setup portal:
+
+|BCLK|LRC|DIN|SD|RGB LED|BOOT button|
+|---|---|---|---|---|---|
+|GPIO 4|GPIO 5|GPIO 6|GPIO 15|GPIO 48|GPIO 0|
+
+GPIO 0 is a strap pin tied to the BOOT button (factory reset), and I2S signals
+must land on valid I2S-capable GPIOs — a wrong assignment can silently brick
+audio or the boot sequence. The shipped/pre-built BIN
+([`release/README.md`](release/README.md)) therefore commits to this exact
+pinout. Building from source for a different board/pinout is an advanced path
+for later; change the `#define`s at the top of `main.c` only if you accept that
+scope.
 
 Wi-Fi drops do not erase NVS — the board reconnects automatically and the LED
 turns red meanwhile.

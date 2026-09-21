@@ -102,25 +102,15 @@ historical evidence; `tmp/` is ignored scratch space. Historical docs contain
 machine-specific paths and private example addresses. The CLI and browser sender
 have separate implementations; do not assume identical processing chains.
 
-## Security and publication
+## Windows package / installer (planned)
 
-Use on a **trusted LAN only**. The app has no authentication, accesses local files,
-and binds to all interfaces by default. Do not port-forward it. For local-browser
-access use `python -m audio_player.app --host 127.0.0.1`. RTP is unencrypted and
-source-IP filtering is not cryptographic authentication. Discover only on your LAN.
+See **docs/WINDOWS_INSTALLER.md** for the full plan.
 
-The Wi-Fi **password was never committed**. The lab SSID and private LAN addresses
-that appeared in working files and docs were replaced with placeholders, and the
-whole Git history was rewritten and then verified to contain no Wi-Fi password or
-SSID. That rewrite changed every commit hash, so cloned copies must be re-cloned.
-
-Two exceptions to keep in mind: **private LAN addresses from the development network
-still appear in historical docs and logs** (`CHANGELOG.md`,
-`docs/PROJECT_STATE.md`, `logs/`), and **rotate your Wi-Fi password if it was ever
-shared** — history scrubbing does not un-share a secret. Ignore rules never remove
-secrets from previous commits, so keep `audio_player/nodes.json`, `eq_presets.json`,
-and real media out of commits (all git-ignored by default).
-
-## License
-
-MIT — see [LICENSE](LICENSE). Dependencies retain their own licenses.
+The next line of work (after the 32-item firmware audit is complete) is a **Windows
+installer package** for this app: a Windows Service wrapper (NSSM), a shipped pre-built
+firmware BIN for the supported board/amp/pinout, an Inno Setup installer EXE with
+per-user or all-users install scope and end-of-install checkboxes (Launch app / Open
+README), an in-app flash panel for esptool-driven flashing, and an offline-first design.
+Full plan, scope, constraints, and future work (other boards, other OS installers,
+online firmware update) are in `docs/WINDOWS_INSTALLER.md`. None of this exists yet;
+the verified app core is the untouched baseline the packaging will wrap.

@@ -7,6 +7,32 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### Config portal, port + node name (2026-09-21)
+- **Setup portal extended**: added `node_name` (optional label) and `server_port`
+  (UDP listen; blank → 1234) fields, persisted into the NVS `node_cfg_t` blob
+  alongside the existing `ssid` / `password` / `server_ip`.
+- **`server_port` is now wired through to `bind()`** — it was previously a stored-but-ignored
+  field and was deleted (commit `5ab451f`, AUDIT #16) for exactly that reason.
+  Re-added *honestly*: validated 1–65535 before save, default-preserving, and
+  actually consumed by the UDP listener. App node port stays in sync.
+- **`CFG_VERSION` 2 → 3** (struct layout changed): a flashed board rejects stale
+  NVS once and reboots into `AudioNode-Setup` for one re-provision — the version
+  gate doing its job.
+- **`/debug` route added**: while the setup AP is up, `http://192.168.4.1/debug`
+  serves a JSON snapshot (version, ssid, server_ip, has_server, server_port,
+  node_name, net_state, play_mode, ring_used, ap_active). No serial needed to
+  confirm a portal save.
+- **Pins documented as fixed** (not portal-configurable): BCLK=4/LRC=5/DIN=6/SD=15/RGB=48/BOOT=0.
+  GPIO0 is a strap pin + factory-reset button, and I2S pins aren't arbitrary
+  GPIOs — making them NVS-editable risks silently bricking boot/audio.
+  `firmware/README.md` now states this up front; `release/README.md` remains
+  the BIN scope doc for the shipped pinout.
+- **PC app fix**: `socketio.run(..., allow_unsafe_werkzeug=True)` in `app.py`
+  so the LAN dev server starts under current Flask-SocketIO (Werkzeug guard).
+  Documented in `audio_player/README.md`; not a production deploy.
+
+### Audit register + roadmap (2026-09-19)
+
 ### Audit register + roadmap (2026-09-19)
 - **`docs/AUDIT.md` added** — living register of external code reviews. Every reported item
   is re-verified against the actual source before it gets a verdict (`✅ done` / `🔲 valid` /

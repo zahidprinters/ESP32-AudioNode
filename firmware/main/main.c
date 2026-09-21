@@ -133,13 +133,20 @@ static inline int16_t gain_clip(int32_t s)
    cfg_load rejects any blob whose size or version doesn't match (#12/#13) — a
    reordered/retyped struct used to load as silent garbage. Old unversioned blobs
    (v1) fail the check by design -> one-time re-provision via setup AP. */
-#define CFG_VERSION 2
+/* Bumped to 3: added server_port (wired to udp_task bind, was deleted in P16
+   because it was stored-but-ignored; this time it's actually consumed) and
+   node_name. Existing v2 blobs are rejected by the version/size check in
+   cfg_load -> one re-provision through the setup AP (NVS kept on failure).
+   See docs/AUDIT.md Phase C/P16 decision (a). */
+#define CFG_VERSION 3
 typedef struct {
     uint8_t version;      /* must equal CFG_VERSION */
     char ssid[33];
     char password[64];
     char server_ip[16];
     uint8_t has_server;   /* 1 = server ip configured by user (sender whitelist) */
+    uint16_t server_port; /* 0 = default UDP_PORT (1234); port the board binds/listens on */
+    char node_name[32];   /* human-readable; logged at boot, shown in portal + /debug */
 } node_cfg_t;
 
 static node_cfg_t node_cfg;
@@ -260,11 +267,17 @@ static esp_err_t portal_get_handler(httpd_req_t *req)
         "padding:8px;margin:6px 0;box-sizing:border-box;}"
         "button{width:100%;padding:10px;background:#157;color:#fff;border:0;}</style>"
         "</head><body><h2>AudioNode Setup</h2>"
-        "<form method='POST' action='/save'>"
+                "<form method='POST' action='/save'>"
         "<label>WiFi SSID</label><input name='ssid' required>"
         "<label>WiFi Password</label><input type='password' name='password'>"
         "<label>Server IP (RTP sender)</label><input name='server_ip' placeholder='192.168.1.100'>"
+        "<label>Node name</label><input name='node_name' maxlength='31' placeholder='e.g. Living Room'>"
+        "<label>Server port</label><input name='server_port' type='number' min='1' max='65535' placeholder='1234 = default'>"
         "<button type='submit'>Save &amp; Connect</button></form>"
+        "<hr><small><b>Pinout (fixed for this build)</b>: "
+        "I2S BCLK=GPIO4 LRC=GPIO5 DIN=GPIO6 SD=GPIO15 (amp, HIGH=on) &middot; "
+        "RGB LED=GPIO48 &middot; BOOT button=GPIO0 (factory reset, hold 5s)"
+        "</small>\n"
         "</body></html>";
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, html, strlen(html));
@@ -322,8 +335,8 @@ static int valid_ipv4(const char *s)
 
 static esp_err_t portal_save_handler(httpd_req_t *req)
 {
-    static char *keys[] = { "ssid", "password", "server_ip", NULL };
-    char vals[3][64] = {{0}};
+    static char *keys[] = { "ssid", "password", "server_ip", "node_name", "server_port", NULL };
+    char vals[5][64] = {{0}};
 
     /* Read request body (form-encoded), bounded. Reserve one byte for the
        terminator: with `off < sizeof(body)` a full 1024-byte body left
@@ -349,7 +362,7 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
         const char *eq = strchr(tok, '=');
         if (!eq) continue;
         size_t klen = eq - tok;
-        for (int k = 0; k < 3; k++) {
+        for (int k = 0; k < 5; k++) {
             if (keys[k] && strlen(keys[k]) == klen && strncmp(tok, keys[k], klen) == 0) {
                 url_decode(eq + 1, vals[k], sizeof(vals[k]));
                 break;
@@ -375,17 +388,62 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
     if (vals[2][0]) snprintf(node_cfg.server_ip, sizeof(node_cfg.server_ip), "%.15s", vals[2]);
     node_cfg.has_server = (vals[2][0] != 0) ? 1 : 0;
 
+    /* Node name: optional, clamped to the buffer. Empty keeps "". */
+    snprintf(node_cfg.node_name, sizeof(node_cfg.node_name), "%.31s", vals[3]);
+
+    /* #16 re-add (wired to bind() in udp_task): server port. Blank/0 -> default
+       UDP_PORT (1234). Strict decimal 1..65535; HTTP 400 BEFORE cfg_save so a
+       typo saves nothing (mirrors #15's server_ip guard, not the old dead value). */
+    node_cfg.server_port = 0;
+    if (vals[4][0]) {
+        char *end = NULL;
+        long p = strtol(vals[4], &end, 10);
+        if (end == vals[4] || *end != '\0' || p < 1 || p > 65535) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "server port must be 1-65535 (blank = default 1234); nothing was saved");
+            return ESP_OK;
+        }
+        node_cfg.server_port = (uint16_t)p;
+    }
+
+
     if (cfg_save() != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs write failed");
         return ESP_OK;
     }
-    printf("cfg: saved via portal (SSID=%s server=%s)\n",
-           node_cfg.ssid, node_cfg.server_ip);
+    printf("cfg: saved via portal (SSID=%s server=%s port=%d name=%s)\n",
+           node_cfg.ssid, node_cfg.server_ip,
+           node_cfg.server_port ? node_cfg.server_port : UDP_PORT,
+           node_cfg.node_name);
 
     httpd_resp_sendstr(req, "Saved. Rebooting into STA mode...");
     vTaskDelay(pdMS_TO_TICKS(300));
     esp_restart();
     return ESP_OK;
+}
+
+/* /debug — minimal live diagnostics over the setup-AP HTTP server (registered in
+   setup_ap_start via register_debug_route). Read net/play/ring state + the
+   configured port/name/whitelist from a phone on AudioNode-Setup; no USB needed. */
+static esp_err_t debug_get_handler(httpd_req_t *req)
+{
+    char json[384];
+    snprintf(json, sizeof(json),
+        "{\"version\":%d,\"ssid\":\"%s\",\"server_ip\":\"%s\",\"has_server\":%d,"
+        "\"server_port\":%d,\"node_name\":\"%s\","
+        "\"net_state\":%d,\"play_mode\":%d,\"ring_used\":%d,\"ap_active\":%d}",
+        node_cfg.version, node_cfg.ssid, node_cfg.server_ip, (int)node_cfg.has_server,
+        node_cfg.server_port ? node_cfg.server_port : UDP_PORT,
+        node_cfg.node_name,
+        net_state, play_mode, ring_used(), ap_active);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+static void register_debug_route(httpd_handle_t hd)
+{
+    httpd_uri_t uri = { .uri = "/debug", .method = HTTP_GET, .handler = debug_get_handler };
+    httpd_register_uri_handler(hd, &uri);
 }
 
 static void setup_ap_start(void)
@@ -430,6 +488,7 @@ static void setup_ap_start(void)
         httpd_register_uri_handler(hd, &save_uri);
     }
     printf("setup ap: running 'AudioNode-Setup' open AP, portal http://%s/\n", AP_GATEWAY);
+    register_debug_route(hd);
 }
 
 /* ── P3: failover — STA no IP in 30 s → return to setup AP (keep NVS) ── */
@@ -678,7 +737,8 @@ static void udp_task(void *arg)
     struct sockaddr_in local = {0};
     local.sin_family = AF_INET;
     local.sin_addr.s_addr = INADDR_ANY;
-    local.sin_port = htons(UDP_PORT);
+    int listen_port = node_cfg.server_port ? node_cfg.server_port : UDP_PORT;
+    local.sin_port = htons(listen_port);
 
     int opt = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -691,7 +751,7 @@ static void udp_task(void *arg)
     }
 
     printf("udp: listening on 0.0.0.0:%d, waiting for RTP L16 (PT=%d)...\n",
-           UDP_PORT, RTP_PT);
+           listen_port, RTP_PT);
 
     static uint8_t rx_buf[2048];            /* RTP hdr (12) + PCM (1920) = 1932 */
     struct sockaddr_in peer;
@@ -719,7 +779,7 @@ static void udp_task(void *arg)
                     printf("udp: idle %lld s, pkts=%" PRIu32 " dropped=%" PRIu32
                            " total=%" PRIu64 " bytes (listening on :%d)\n",
                            (long long)((esp_timer_get_time() - last_rx_us) / 1000000),
-                           pkts, dropped, total, UDP_PORT);
+                           pkts, dropped, total, listen_port);
                     idle_reported = 1;
                 }
                 /* 1 tick = 10 ms at CONFIG_FREERTOS_HZ=100, so this polls ~100x/s
@@ -860,10 +920,14 @@ void app_main(void)
         printf("cfg: no usable config (first boot / factory reset / rejected blob)\n");
     }
     cfg_apply_server_whitelist();
+    printf("cfg: node name=%s server_port=%d (default %d)\n",
+           node_cfg.node_name,
+           node_cfg.server_port ? node_cfg.server_port : UDP_PORT, UDP_PORT);
 
     if (node_cfg.ssid[0]) {
         sta_mode_start();
-        printf("wifi: STA mode, power-save OFF, listening on :%d\n", UDP_PORT);
+        printf("wifi: STA mode, power-save OFF, listening on :%d (node=%s)\n",
+               node_cfg.server_port ? node_cfg.server_port : UDP_PORT, node_cfg.node_name);
     } else {
         printf("wifi: no SSID configured, starting setup AP\n");
         setup_ap_start();
