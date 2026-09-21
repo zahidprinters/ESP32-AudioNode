@@ -558,7 +558,7 @@ def main():
     _log.info("audio_player: library_root=%s", cfg.library_root)
     _log.info("audio_player: nodes=%s", [n["ip"] for n in cfg.nodes])
     _log.info("audio_player: UI at http://localhost:%d", cfg.port)
-    socketio.run(app, host=cfg.host, port=cfg.port, log_output=False)
+    socketio.run(app, host=cfg.host, port=cfg.port, log_output=False, allow_unsafe_werkzeug=True)
 
 
 if __name__ == "__main__":
