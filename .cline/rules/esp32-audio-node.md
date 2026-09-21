@@ -1,4 +1,4 @@
-# WORKFLOW SYSTEM (mandatory — read .cline/rules/workflow.md and PROJECT_STATE.md before ANY task)
+﻿# WORKFLOW SYSTEM (mandatory — read .cline/rules/workflow.md and PROJECT_STATE.md before ANY task)
 # Update PROJECT_STATE.md with micro-level detail after every change, build, flash, and test.
 # Minimal change → build → flash → log → verify → commit (only if verified on hardware).
 # Commit only verified working states; if a fix fails, log it and try a different approach.

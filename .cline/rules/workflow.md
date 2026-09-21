@@ -1,4 +1,4 @@
-# WORKFLOW SYSTEM — MANDATORY (follow every session, every task)
+﻿# WORKFLOW SYSTEM — MANDATORY (follow every session, every task)
 
 ## The system
 `PROJECT_STATE.md` (workspace root) is the living memory of the project.
