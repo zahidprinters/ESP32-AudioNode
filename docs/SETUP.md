@@ -1,4 +1,4 @@
-# Server setup — AudioNode
+﻿# Server setup — AudioNode
 
 How to run the audio server that sends PCM audio to one or more AudioNode boards over RTP/UDP.
 

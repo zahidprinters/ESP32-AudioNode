@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to the **ESP32 AudioNode** project are documented here.
 Format: latest first. Each entry maps to a git commit. See each doc file (README, ARCHITECTURE, etc.) for current state.

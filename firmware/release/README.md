@@ -1,4 +1,4 @@
-
+﻿
 # Shipped firmware BIN — scope (planned)
 
 This file will live in `firmware/release/` alongside the shipped production BIN and `firmware-version.json`. It is not yet populated; the first release ships the BIN for the exact board/amp/pinout this repo supports. The doc exists now so the BIN's scope is honest when it ships.

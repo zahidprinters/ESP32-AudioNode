@@ -1,4 +1,4 @@
-# ESP32 AudioNode — WiFi speaker box
+﻿# ESP32 AudioNode — WiFi speaker box
 
 A **networked speaker box**: an ESP32-S3 board that joins your WiFi, receives PCM audio over RTP/UDP from a server on the same network, and plays it out through a MAX98357A class-D amp.
 

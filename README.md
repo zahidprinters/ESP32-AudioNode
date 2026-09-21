@@ -1,4 +1,4 @@
-# ESP32 AudioNode
+﻿# ESP32 AudioNode
 
 A Wi-Fi audio streaming system with ESP32-S3 speaker firmware and a browser-based
 Python player, featuring RTP/UDP streaming, node management, and a 10-band equalizer.

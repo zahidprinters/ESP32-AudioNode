@@ -1,4 +1,4 @@
-# firmware — ESP32-S3 AudioNode
+﻿# firmware — ESP32-S3 AudioNode
 
 ESP-IDF firmware for the speaker node. It joins Wi-Fi, runs a UDP listener on
 port 1234, validates incoming RTP L16 datagrams, buffers them in PSRAM and pumps

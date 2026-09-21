@@ -1,4 +1,4 @@
-/*
+﻿/*
  * audio_node — WiFi audio streamer (M4)
  * Board: ESP32-S3-DevKitC-1-N8R2, Amp: MAX98357A
  * 48000 Hz, 16-bit, MONO, I2S Philips std, no MCLK.
@@ -405,7 +405,6 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
         }
         node_cfg.server_port = (uint16_t)p;
     }
-
 
     if (cfg_save() != ESP_OK) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "nvs write failed");

@@ -1,4 +1,4 @@
-# audio_player — browser-based RTP/UDP audio server
+﻿# audio_player — browser-based RTP/UDP audio server
 
 The PC side of the project. It decodes audio files with ffmpeg, slices the PCM
 into 20 ms RTP frames and streams them over UDP to one or more ESP32 AudioNode

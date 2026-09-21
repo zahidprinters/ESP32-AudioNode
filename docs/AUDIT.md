@@ -1,4 +1,4 @@
-# AUDIT REGISTER — firmware review triage & phase plan
+﻿# AUDIT REGISTER — firmware review triage & phase plan
 
 Living register of external code reviews. **Every item is re-verified against the actual
 source before it gets a verdict** — a review is a hypothesis, the code and the hardware
@@ -305,7 +305,6 @@ headings, 6 declared supersessions, zero unexpected line drops
 (nothing imported them) — added by a previous session's patch script and never wired up.
 Removed 2026-09-19 (the app persists schedules through `settings_save()`).
 
-
 **E-12 · Phase A implementation traps + the #23 blocker (2026-09-19).**
 Two silent-failure traps surfaced while building Phase A:
 (a) **`CONFIG_FREERTOS_HZ=100` in this project**, so `pdMS_TO_TICKS(5)` evaluates to **0
@@ -398,4 +397,3 @@ Both checks together: `len == sizeof(node_cfg) && version == CFG_VERSION`.
   factory reset (STA-with-IP or AP mode) — unchanged by #29.
 - A second brief BOOT press during AP mode printed "BOOT held" and released early — the
   task's cancel path (`held_ms >= 1000 → released, cancelled`) behaved as designed.
-

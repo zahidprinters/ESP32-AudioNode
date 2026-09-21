@@ -1,4 +1,4 @@
-# Guidelines — AudioNode development
+﻿# Guidelines — AudioNode development
 
 ## How to use these guidelines
 
@@ -108,7 +108,6 @@ The TCP path proved the audio hardware works end to end. The RTP path is the pro
 - The app is Windows-first today. Linux/macOS run the same `python -m audio_player.app` as long as ffmpeg (imageio-ffmpeg) is installed; the only Windows-only piece is `audio_player/send_pcm.py` loop mode, not the app.
 
 The TCP path proved the audio hardware works end to end. The RTP path is the product transport.
-
 
 ## Repository layout
 

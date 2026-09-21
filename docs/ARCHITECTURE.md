@@ -1,4 +1,4 @@
-# Architecture — AudioNode WiFi speaker box
+﻿# Architecture — AudioNode WiFi speaker box
 
 ## Product concept
 

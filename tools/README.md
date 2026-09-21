@@ -1,4 +1,4 @@
-# tools/
+﻿# tools/
 
 Environment and setup tooling. Everything needed to go from a clean machine to
 a running system lives here or is documented from here.
