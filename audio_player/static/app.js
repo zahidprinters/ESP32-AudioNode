@@ -8,6 +8,8 @@
   var $ = function (id) { return document.getElementById(id); };
 
   function api(path, body, method) {
+  // REST helper. api(path) does GET, api(path, body) POSTs JSON, and
+  //   //   api(path, {method: 'DELETE'}) is the shorthand the schedule list uses.
     // Accept api(path, {method:"DELETE"}) shorthand used by the schedule list.
     if (!method && body && typeof body.method === "string" &&
         Object.keys(body).length === 1) {
@@ -44,6 +46,7 @@
   }
 
   function renderFiles() {
+  // Redraw the file list from STATE.files, marking the current selection.
     var ul = $("fileList");
     ul.innerHTML = "";
     STATE.files.forEach(function (f, i) {
@@ -67,6 +70,7 @@
   }
 
   function selectFile(i) {
+  // Make file i the selection and reset the seek bar to it.
     var f = STATE.files[i];
     if (!f) { return; }
     STATE.src = f.path;
@@ -103,6 +107,7 @@
   function curPath() { return STATE.src_path || STATE.src || null; }
 
   function doPlay() {
+  // Start playback of the selected file at the current volume.
     if (!curPath()) {
       // Nothing selected yet: play the first library file if there is one,
       // otherwise ask for a library folder.
@@ -117,6 +122,7 @@
   }
 
   function doStop() {
+  // Stop playback and reset the transport display.
     api("/api/stop", {})
       .then(function () {
         $("playBtn").textContent = "Play";
@@ -128,6 +134,7 @@
   }
 
   function doPause() {
+  // Toggle between pause and resume.
     var paused = STATE.state === "paused";
     api(paused ? "/api/resume" : "/api/pause", {})
       .then(function (d) { if (d.error) { showError(d.error); } })
@@ -135,6 +142,7 @@
   }
 
   function setVolume(v) {
+  // Set the volume slider and push it to the server.
     v = Math.min(STATE.maxVolume, Math.max(0, v));   // clamp to settings ceiling
     STATE.volume = v;
     api("/api/volume", { volume: v })
@@ -143,6 +151,7 @@
   }
 
   function seek(posMs) {
+  // Seek to a position in milliseconds.
     api("/api/seek", { position_ms: posMs })
       .then(function (d) { if (d.error) { showError(d.error); } })
       .catch(function (e) { showError(e.message); });
@@ -169,6 +178,7 @@
   }
 
   function renderNodes() {
+  // Redraw the node table from the last status payload.
     var ul = $("nodeList");
     ul.innerHTML = "";
     if (!STATE.nodes.length) {
@@ -240,6 +250,7 @@
   }
 
   function renderDiscovered(found, configured) {
+  // Redraw the discovery result list, flagging known nodes.
     var ul = $("discList");
     if (!ul) { return; }
     ul.innerHTML = "";
@@ -317,6 +328,7 @@
   }
 
   function showAddSchedule() {
+  // Open the add-schedule dialog.
     var name = prompt("Plan name (e.g. 'Morning music')");
     if (!name || !name.trim()) { return; }
     var file = prompt("File name in the current library folder (e.g. song.mp3)");
@@ -336,6 +348,7 @@
       }).catch(function (e) { showError("Schedule add failed: " + e.message); });
   }
   function showTab(name) {
+  // Switch the visible tab by name.
     var panes = document.querySelectorAll(".tabpane");
     for (var i = 0; i < panes.length; i++) {
       panes[i].hidden = panes[i].id !== "tab-" + name;
@@ -348,11 +361,13 @@
   }
 
   function closeMenus() {
+  // Close every open dropdown/menu.
     var ms = document.querySelectorAll(".menu.open");
     for (var i = 0; i < ms.length; i++) { ms[i].classList.remove("open"); }
   }
 
   function menuAction(act) {
+  // Run a menubar action (help, about, rescan...).
     if (act === "choose-lib") { pickFolder(); }
     else if (act === "rescan") { loadLibrary(); }
     else if (act === "play") { doPlay(); }
@@ -364,6 +379,7 @@
   }
 
   function renderFooter() {
+  // Redraw the footer status bar.
     $("stState").textContent = "state: " + STATE.state;
     $("stNodes").textContent = "nodes: " + STATE.nodes.length +
       (STATE.nodes.some(function (n) { return n.playing; }) ? " (streaming)" : "");
@@ -382,10 +398,12 @@
   }
 
   function formatMs(ms) {
+  // Format milliseconds as m:ss.
     return formatS((ms == null ? 0 : ms) / 1000);
   }
 
   function fmtBytes(b) {
+  // Format a byte count as a human-readable size.
     if (!b) { return "-"; }
     if (b > 1048576) { return (b / 1048576).toFixed(1) + " MB"; }
     if (b > 1024) { return (b / 1024).toFixed(1) + " KB"; }
@@ -393,6 +411,7 @@
   }
 
   function showError(msg) {
+  // Show a dismissible error to the user.
     var box = $("errorBox");
     box.textContent = (msg && msg.message) ? msg.message : String(msg);
     box.hidden = false;
@@ -408,6 +427,7 @@
   var eqTimer = null, eqDrags = 0;
 
   function eqColumn(i, label) {
+  // Build one EQ slider column (preamp or one band) and return its markup.
     var col = document.createElement("div");
     col.className = "eqcol" + (i < 0 ? " preamp" : "");
     var s = document.createElement("input");
@@ -433,10 +453,12 @@
   }
 
   function bandLabel(hz) {
+  // Human label for a band centre frequency.
     return hz >= 1000 ? (hz / 1000) + " kHz" : hz + " Hz";
   }
 
   function eqSetLabel(i) {
+  // Refresh the text label above one EQ slider.
     var el = i < 0 ? $("eqPre") : $("eqb" + i);
     var lab = i < 0 ? $("eqPreDb") : $("eqd" + i);
     var v = parseFloat(el.value);
@@ -444,6 +466,7 @@
   }
 
   function eqStateFromUi() {
+  // Read the EQ sliders into an {enabled, preamp_db, gains} object.
     var gains = [];
     for (var i = 0; i < EQ.bands.length; i++) {
       gains.push(parseFloat($("eqb" + i).value));
@@ -454,6 +477,7 @@
   }
 
   function eqApplyState(eq) {
+  // Push an EQ state from the server into the sliders.
     if (!eq) { return; }
     $("eqEnable").checked = !!eq.enabled;
     $("eqPre").value = eq.preamp_db;
@@ -465,17 +489,20 @@
   }
 
   function eqSchedulePush() {
+  // Coalesce rapid slider moves into one server update.
     clearTimeout(eqTimer);
     eqTimer = setTimeout(eqPush, 250);
   }
 
   function eqPush() {
+  // Send the current EQ state to the server.
     api("/api/eq", eqStateFromUi()).then(function (d) {
       if (d && d.error) { showError(d.error); }
     }).catch(function (e) { showError("EQ apply failed: " + e.message); });
   }
 
   function refreshPresets(names, selected) {
+  // Rebuild the preset dropdown from a list of names.
     var sel = $("eqPreset");
     sel.innerHTML = "<option value=''>Preset…</option>";
     names.forEach(function (p) {
@@ -487,6 +514,7 @@
   }
 
   function buildEqUi() {
+  // Build the whole equalizer panel (preamp + 10 bands).
     api("/api/eq").then(function (d) {
       if (d && d.error) { showError(d.error); return; }
       EQ.bands = d.bands || [];
@@ -502,6 +530,7 @@
   }
 
   function onSavePreset() {
+  // Save the current EQ curve under a chosen name.
     var n = prompt("Save current EQ as preset (name):");
     if (!n || !n.trim()) { return; }
     api("/api/eq/presets", { name: n.trim() }).then(function (d) {
@@ -515,6 +544,7 @@
   var socket = null;
 
   function connectWS() {
+  // Open the Socket.IO connection and wire up the events.
     if (typeof io === "undefined") {
       var s = document.createElement("script");
       s.src = "https://cdn.socket.io/4.7.5/socket.io.min.js";
@@ -527,6 +557,7 @@
   }
 
   function tryConnect() {
+  // Reconnect with a backoff when the socket drops.
     socket = io("/", { reconnection: true, reconnectionDelay: 1000 });
     socket.on("player_status", function (d) {
       if (d.state !== undefined) { STATE.state = d.state; }
@@ -658,6 +689,7 @@
   }
 
   function settingsLoadUi() {
+  // Read the settings form into a settings object.
     // Load the preset list first, then fill values — otherwise the saved
     // default-EQ name is set before its <option> exists and gets lost.
     Promise.all([

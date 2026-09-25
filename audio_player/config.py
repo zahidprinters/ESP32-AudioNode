@@ -10,11 +10,9 @@ from pathlib import Path
 # RTP constants (MUST match firmware ARCHITECTURE.md protocol spec)
 # ---------------------------------------------------------------------------
 RTP_SRATE              = 48000          # Hz
-RTP_BIT_DEPTH          = 16
-RTP_CHANNELS           = 1              # mono
 RTP_FRAME_MS           = 20
 RTP_SAMPLES_PER_FRAME  = 960            # = SRATE * FRAME_MS / 1000
-RTP_BYTES_PER_FRAME    = 1920           # = SAMPLES_PER_FRAME * BIT_DEPTH / 8
+RTP_BYTES_PER_FRAME    = 1920           # = SAMPLES_PER_FRAME * 2 (16-bit mono)
 RTP_PT                 = 96             # dynamic L16/48k/mono
 RTP_PORT               = 1234           # board listener port
 

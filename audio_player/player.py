@@ -67,10 +67,6 @@ class Player:
         return self._volume
 
     @property
-    def bytes_sent(self):
-        return self._bytes_sent
-
-    @property
     def sample_position(self):
         """Playback position in samples (server-side: what we have sent)."""
         if self._paused:
@@ -83,6 +79,8 @@ class Player:
         return self._base_samples + int(self._bytes_sent / 2)
 
     def play(self, source_path: str, volume: float = None):
+        """Start streaming a file, or resume when already paused on it.
+                Raises FileNotFoundError for a path that is not a file. Returns nothing."""
         # If currently paused on the same source, resume instead of restarting.
         if self._paused and self._src and os.path.abspath(str(source_path)) == self._src:
             self.resume()
@@ -110,6 +108,8 @@ class Player:
                         volume=self._volume)
 
     def stop(self):
+        """Stop the stream and reset the counters. Safe to call when idle.
+                Returns nothing."""
         if not self._running and not self._paused:
             return
         self._kill_ev.set()
@@ -156,6 +156,9 @@ class Player:
                         volume=self._volume)
 
     def set_volume(self, volume: float):
+        """Set the output volume, clamped to 0..10. Restarts the pipeline at the
+                current position when playing (ffmpeg volume is an input filter),
+                so a small gap is expected. Returns nothing."""
         vol = max(0.0, min(10.0, float(volume)))
         if abs(vol - self._volume) < 1e-3:
             return
@@ -219,6 +222,7 @@ class Player:
         return af
 
     def _eq_snapshot(self):
+        """A copy of the current EQ state, shaped for the status push."""
         return {"enabled": cfg.eq_enabled, "preamp_db": cfg.eq_preamp_db,
                 "gains": list(cfg.eq_gains)}
 
@@ -241,6 +245,9 @@ class Player:
         self._status_cb(eq=self._eq_snapshot())
 
     def _start_pipeline_at(self, src: str, vol: float, seek_sec: float):
+        """Spawn ffmpeg decoding `src` from `seek_sec`, with the filter chain built
+                for `vol`, and start the pump thread on it. Returns nothing;
+                a failure is reported through the status callback."""
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setblocking(False)
         cmd = [
@@ -279,6 +286,8 @@ class Player:
         self._thread.start()
 
     def _kill_pipeline(self):
+        """Tear down the ffmpeg process and the UDP socket, and forget both.
+                Returns nothing."""
         if self._proc and self._proc.poll() is None:
             try:
                 self._proc.kill()
@@ -297,6 +306,9 @@ class Player:
         self._proc = None
 
     def _pump(self):
+        """Pump thread: slice ffmpeg stdout into 20 ms frames and send each one.
+                Emits "stopped" when the source ends so the UI does not stay "playing".
+                Returns nothing."""
         buf = bytearray()
         while not self._stop_ev.is_set():
             try:
@@ -324,6 +336,8 @@ class Player:
         self._status_cb(state="stopped")
 
     def _send_frame(self, frame: bytes):
+        """Wrap one PCM frame in an RTP header, send it to every configured node,
+                advance seq/ts, and sleep off any real-time lead. Returns nothing."""
         pkt = rtp_header(self._seq, self._ts, self._ssrc) + frame
         self._seq = (self._seq + 1) & 0xFFFF
         self._ts = (self._ts + RTP_SAMPLES_PER_FRAME) & 0xFFFFFFFF
@@ -350,6 +364,8 @@ class Player:
             time.sleep(ahead if ahead < 0.25 else 0.25)
 
     def _status_cb(self, **kw):
+        """Invoke the status callback, swallowing (and logging) anything it raises so a
+                UI error can never kill the pump. Returns nothing."""
         try:
             self._status_cb(**kw)
         except Exception as e:

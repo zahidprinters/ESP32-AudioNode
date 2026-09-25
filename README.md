@@ -134,6 +134,7 @@ chains — do not assume they are identical.
 ## Documentation
 
 - [Architecture, wire format and packet validation](docs/ARCHITECTURE.md)
+- [Function map: every function, what it does, what it returns](docs/FUNCTION_MAP.md)
 - [Server setup, CLI sender, equalizer, multi-node](docs/SETUP.md)
 - [Development guidelines and build/flash/test loop](docs/GUIDELINES.md)
 - [Project state: what is verified, what failed, what is next](docs/PROJECT_STATE.md)

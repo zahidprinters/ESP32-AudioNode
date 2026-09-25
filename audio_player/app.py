@@ -54,6 +54,9 @@ def _setup_file_log():
 
 
 def create_app():
+    """Build the Flask app, routes, WebSocket handlers and background threads.
+        Returns (app, socketio, player). All persisted state is loaded here,
+        before the routes are built."""
     from flask import Flask, render_template, request, jsonify
     from flask_socketio import SocketIO, emit
 
@@ -94,12 +97,16 @@ def create_app():
                 for n in cfg.nodes]
 
     def _node_status():
+        """Node view for the API. Returns a list of node dicts; holds the lock only
+            long enough to read the state it needs."""
         with status_lock:
             state = status["state"]
             pos_s = status.get("position_s", 0.0)
         return _nodes_for(state, pos_s)
 
     def _on_player_status(**kw):
+        """Player callback: fold a state change into the status dict and push it to
+            every connected browser. Returns nothing."""
         with status_lock:
             for k in ("state", "src", "volume", "error", "eq", "src_path"):
                 if k in kw:
@@ -112,6 +119,8 @@ def create_app():
             _log.warning("emit player_status failed: %s", e)
 
     def background_position_loop():
+        """Thread: republish playback position 4x/second and refresh the per-node
+            readout. Returns nothing; runs until the process ends."""
         while True:
             time.sleep(0.25)
             try:
@@ -140,6 +149,8 @@ def create_app():
     player = Player(status_cb=_on_player_status)
 
     def _status_snapshot():
+        """What /api/status returns: a copy of the status dict plus the node view.
+            Never holds a lock while building the node list."""
         with status_lock:
             snap = dict(status)
         snap["nodes"] = _node_status()
@@ -148,14 +159,19 @@ def create_app():
     # ---- REST routes (the browser UI uses these) --------------------------
     @app.route("/")
     def index():
+        """GET / -> the single-page UI. Returns the rendered template."""
         return render_template("index.html")
 
     @app.route("/api/status")
     def api_status():
+        """GET /api/status -> state, position, volume, nodes and EQ as JSON."""
         return jsonify(_status_snapshot())
 
     @app.route("/api/library")
     def api_library():
+        """GET /api/library?root=DIR -> scan DIR recursively for audio files and adopt
+            it as the library root. Returns {root, files[]}, with {error} set when
+            the path is not a directory."""
         root = request.args.get("root") or cfg.library_root
         if os.path.isdir(root):
             cfg.library_root = root
@@ -165,6 +181,8 @@ def create_app():
 
     @app.route("/api/play", methods=["POST"])
     def api_play():
+        """POST /api/play {path, volume?} -> start playback, or resume if paused on the
+            same file. Returns {ok, src}, or 400 {error}."""
         data = request.get_json(silent=True) or {}
         path = data.get("path")
         vol = min(cfg.max_volume, float(data.get("volume", cfg.default_volume)))
@@ -179,11 +197,14 @@ def create_app():
 
     @app.route("/api/stop", methods=["POST"])
     def api_stop():
+        """POST /api/stop -> stop the stream. Returns {ok}."""
         player.stop()
         return jsonify({"ok": True})
 
     @app.route("/api/volume", methods=["POST"])
     def api_volume():
+        """POST /api/volume {volume} -> set volume, clamped to the configured maximum.
+            Returns {ok, volume} or 400 {error}."""
         data = request.get_json(silent=True) or {}
         try:
             player.set_volume(min(cfg.max_volume,
@@ -194,6 +215,8 @@ def create_app():
 
     @app.route("/api/seek", methods=["POST"])
     def api_seek():
+        """POST /api/seek {position_ms} -> restart the pipeline there. Returns
+            {ok, position_ms} or 400 {error}."""
         data = request.get_json(silent=True) or {}
         try:
             pos_ms = float(data.get("position_ms", 0))
@@ -204,14 +227,17 @@ def create_app():
 
     # ---- Equalizer (VLC-style 10-band; live-applied by player.set_eq) -----
     def _eq_view():
+        """The EQ dict the API returns: enabled flag, preamp, band gains, limits."""
         return {"enabled": cfg.eq_enabled, "preamp_db": cfg.eq_preamp_db,
                 "gains": list(cfg.eq_gains)}
 
     def _preset_names():
+        """Sorted names of every available preset, built-in and user alike."""
         return sorted(set(EQ_BUILTIN_PRESETS) | set(cfg.eq_user_presets))
 
     @app.route("/api/eq", methods=["GET"])
     def api_eq_get():
+        """GET /api/eq -> current EQ state, band limits and preset names."""
         return jsonify({"enabled": cfg.eq_enabled,
                         "preamp_db": cfg.eq_preamp_db, "gains": cfg.eq_gains,
                         "bands": EQ_BANDS, "min_db": EQ_MIN_DB,
@@ -219,6 +245,8 @@ def create_app():
 
     @app.route("/api/eq", methods=["POST"])
     def api_eq_set():
+        """POST /api/eq {enabled, preamp_db, gains[10]} -> clamp, persist and apply
+            live. Returns {ok, eq}, or 400 {error} on a wrong band count."""
         data = request.get_json(silent=True) or {}
         try:
             player.set_eq(enabled=data.get("enabled"),
@@ -230,6 +258,8 @@ def create_app():
 
     @app.route("/api/eq/preset", methods=["POST"])
     def api_eq_apply_preset():
+        """POST /api/eq/preset {name} -> apply a built-in or user preset. Returns
+            {ok, eq}, or 400 {error} for an unknown name."""
         name = str((request.get_json(silent=True) or {}).get("name", ""))
         preset = EQ_BUILTIN_PRESETS.get(name) or cfg.eq_user_presets.get(name)
         if preset is None:
@@ -246,6 +276,8 @@ def create_app():
 
     @app.route("/api/eq/presets", methods=["POST"])
     def api_eq_save_preset():
+        """POST /api/eq/presets {name} -> store the current curve under a name.
+            Returns {ok, presets}; refuses to overwrite a built-in."""
         data = request.get_json(silent=True) or {}
         name = str(data.get("name", "")).strip()
         if not name:
@@ -261,16 +293,19 @@ def create_app():
     # ---- Pause / resume / user settings -------------------------------------
     @app.route("/api/pause", methods=["POST"])
     def api_pause():
+        """POST /api/pause -> stop the pipeline, keep the position. Returns {ok}."""
         player.pause()
         return jsonify({"ok": True})
 
     @app.route("/api/resume", methods=["POST"])
     def api_resume():
+        """POST /api/resume -> continue from the paused position. Returns {ok}."""
         player.resume()
         return jsonify({"ok": True})
 
     @app.route("/api/settings", methods=["GET"])
     def api_settings_get():
+        """GET /api/settings -> max volume, default EQ preset, default library root."""
         return jsonify({"ok": True, "settings": {
             "max_volume": cfg.max_volume,
             "default_eq_preset": cfg.default_eq_preset,
@@ -278,6 +313,8 @@ def create_app():
 
     @app.route("/api/settings", methods=["POST"])
     def api_settings_set():
+        """POST /api/settings -> change any subset, persist, and return the same payload
+            as the GET."""
         data = request.get_json(silent=True) or {}
         if "max_volume" in data:
             cfg.max_volume = max(0.0, min(10.0, float(data["max_volume"])))
@@ -314,10 +351,13 @@ def create_app():
 
     @app.route("/api/schedule", methods=["GET"])
     def api_schedule_get():
+        """GET /api/schedule -> every scheduled play/stop plan."""
         return jsonify({"plans": cfg.scheduled_plans})
 
     @app.route("/api/schedule", methods=["POST"])
     def api_schedule_add():
+        """POST /api/schedule {name, action, file, time} -> validate and add a plan,
+            persisted in settings.json. Returns {ok, plans} or 400 {error}."""
         data = request.get_json(silent=True) or {}
         plan, err = _plans_from_body(data)
         if err:
@@ -330,6 +370,8 @@ def create_app():
 
     @app.route("/api/schedule/<int:pid>", methods=["DELETE"])
     def api_schedule_remove(pid):
+        """DELETE /api/schedule/<id> -> drop one plan. Returns {ok, plans}, or 404 if no
+            plan has that id."""
         kept = [p for p in cfg.scheduled_plans if p["id"] != pid]
         if len(kept) == len(cfg.scheduled_plans):
             return jsonify({"error": "no plan with id %d" % pid}), 404
@@ -369,6 +411,10 @@ def create_app():
         return sorted(macs.items())
 
     def discover_nodes():
+        """Find boards on the LAN: ping-sweep the local /24, then keep hosts whose
+            MAC OUI belongs to Espressif. The board is a UDP listener, so there is
+            no packet of its own to sniff. Returns {subnet, found[],
+            configured[]} or {error}. Bounded, ~10 s."""
         base = _local_net()
         if not base:
             return {"error": "could not determine the server's subnet"}
@@ -402,10 +448,13 @@ def create_app():
 
     @app.route("/api/nodes", methods=["GET"])
     def api_nodes_get():
+        """GET /api/nodes -> the configured boards."""
         return jsonify({"nodes": cfg.nodes})
 
     @app.route("/api/nodes", methods=["POST"])
     def api_nodes_add():
+        """POST /api/nodes {ip, port?, name?} -> add or update a board and persist
+            the list. Returns {ok, nodes} or 400 {error}."""
         data = request.get_json(silent=True) or {}
         ip = str(data.get("ip", "")).strip()
         port = int(data.get("port", RTP_PORT))
@@ -426,6 +475,8 @@ def create_app():
 
     @app.route("/api/nodes/remove", methods=["POST"])
     def api_nodes_remove():
+        """POST /api/nodes/remove {ip} -> drop a board. Returns {ok, nodes}, 404 when
+            unknown, or 400 when it would remove the last node."""
         data = request.get_json(silent=True) or {}
         ip = str(data.get("ip", "")).strip()
         before = len(cfg.nodes)
@@ -440,11 +491,14 @@ def create_app():
 
     @app.route("/api/nodes/discover", methods=["POST"])
     def api_nodes_discover():
+        """POST /api/nodes/discover -> run discover_nodes()."""
         return jsonify(discover_nodes())
 
     # ---- Socket.IO handlers (same ops, for WS-only clients) --------------
     @socketio.on("play", namespace="/")
     def ws_play(data):
+        """WebSocket "play" -> as /api/play; failures come back as an "error" event.
+            Returns nothing."""
         data = data or {}
         path = data.get("path") or data.get("file")
         if not path:
@@ -457,10 +511,12 @@ def create_app():
 
     @socketio.on("stop", namespace="/")
     def ws_stop(_data=None):
+        """WebSocket "stop" -> stop the stream. Returns nothing."""
         player.stop()
 
     @socketio.on("set_volume", namespace="/")
     def ws_volume(data):
+        """WebSocket "set_volume" {volume} -> set the volume. Returns nothing."""
         data = data or {}
         try:
             player.set_volume(float(data.get("volume", cfg.default_volume)))
@@ -469,6 +525,7 @@ def create_app():
 
     @socketio.on("seek", namespace="/")
     def ws_seek(data):
+        """WebSocket "seek" {position_ms} -> seek. Returns nothing."""
         data = data or {}
         try:
             pos_ms = float(data.get("position_ms", 0))
@@ -478,6 +535,8 @@ def create_app():
 
     @socketio.on("set_library_root", namespace="/")
     def ws_set_library_root(data):
+        """WebSocket "set_library_root" {root} -> adopt a folder and broadcast
+            "library_updated". Returns nothing."""
         root = str((data or {}).get("root", ""))
         if os.path.isdir(root):
             cfg.library_root = root
@@ -487,6 +546,7 @@ def create_app():
 
     @socketio.on("get_status", namespace="/")
     def ws_get_status(_data=None):
+        """WebSocket "get_status" -> emit the full status snapshot to the caller."""
         emit("player_status", _status_snapshot())
 
     threading.Thread(target=background_position_loop, name="pos-loop",
@@ -495,6 +555,8 @@ def create_app():
     # seek bar / footer position track playback (state-change pushes alone
     # leave the position frozen between events).
     def background_status_tick():
+        """Thread: re-emit the full status once a second so a client that connected
+            between events still sees live state. Returns nothing."""
         while True:
             time.sleep(1)
             try:
@@ -508,6 +570,9 @@ def create_app():
     # Background scheduler: check every second and fire scheduled play/stop at
     # the right wall-clock time. Plans persist across restarts.
     def background_schedule_loop():
+        """Thread: once a second, fire any scheduled play/stop whose local wall-clock
+            time has just arrived; broadcast the plan list when something
+            fired. Returns nothing."""
         while True:
             time.sleep(1)
             now = datetime.datetime.now()
@@ -555,6 +620,8 @@ def create_app():
 
 
 def main():
+    """CLI entry point: verify dependencies, build the app, serve it. Exits 1 if the
+        required packages are missing. Does not return otherwise."""
     import argparse
     ap = argparse.ArgumentParser(
         description="audio_player — browser RTP/UDP audio server for ESP32 nodes")

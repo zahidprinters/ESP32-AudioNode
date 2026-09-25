@@ -1,8 +1,23 @@
 /*
- * audio_node — WiFi audio streamer (M4)
- * Board: ESP32-S3-DevKitC-1-N8R2, Amp: MAX98357A
- * 48000 Hz, 16-bit, MONO, I2S Philips std, no MCLK.
- * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled), RGB LED=48, BOOT=0 (factory reset)
+ * audio_node — the entire board application for an ESP32-S3 AudioNode speaker.
+ *
+ * One boot, end to end: load the Wi-Fi and server configuration from NVS and
+ * join that network — or, with no usable config, raise the open
+ * "AudioNode-Setup" access point so a phone can provision it over HTTP. Then
+ * listen on UDP for RTP L16 audio, validate every datagram, buffer the PCM in a
+ * PSRAM ring, and pump it into I2S feeding a MAX98357A amplifier. An on-board
+ * RGB LED reports Wi-Fi state and audio level; holding BOOT erases the config.
+ *
+ * Hardware, fixed (see the #defines below): ESP32-S3-DevKitC-1-N8R2 with a
+ * MAX98357A. Audio is 48000 Hz, 16-bit, MONO, I2S Philips standard, no MCLK
+ * (the amplifier derives its own clock from BCLK).
+ * Pins: BCLK=4, LRC=5, DIN=6, SD=15 (HIGH = amp enabled), RGB LED=48, BOOT=0.
+ *
+ * The wire format and the reasoning behind the design are in
+ * docs/ARCHITECTURE.md; build and flash steps are in firmware/README.md.
+ * Section map, top to bottom: audio format -> ring buffer -> gain -> NVS
+ * config -> Wi-Fi events -> STA mode -> setup AP + portal -> factory reset
+ * -> I2S + pump -> LED -> UDP receiver -> app_main.
  */
 #include <stdio.h>
 #include <string.h>
@@ -25,37 +40,43 @@
 #include "esp_system.h"
 #include "esp_mac.h"      /* MACSTR / MAC2STR for the setup-AP station logs */
 #include <stdlib.h>
-#include <inttypes.h>     /* PRIu32/PRIu64 in the UDP stats logs (#25) */
+#include <inttypes.h>     /* PRIu32/PRIu64 for the 64-bit counter in the UDP stats log */
 
-/* P1: RTP L16 over UDP — 48 kHz, 16-bit, mono, 20 ms frames (960 samples / 1920 bytes) */
+/* RTP L16 over UDP — 48 kHz, 16-bit, mono, 20 ms frames (960 samples / 1920 bytes) */
 #define UDP_PORT     1234
 #define RTP_PT        96   /* dynamic payload type for L16/48k/mono */
 #define FRAME_SAMPLES 960
 #define FRAME_BYTES  (FRAME_SAMPLES * 2)   /* 16-bit = 2 bytes/sample */
 
-/* Configured server IP for source-IP whitelist. 0 = accept any (set by NVS in P3). */
+/* Configured server IP for source-IP whitelist. 0 = accept any (set from NVS). */
 static uint32_t configured_server_ip = 0;
 
-/* M3: raw PCM streaming — recv → PSRAM ring buffer → I2S pump.
+/* Audio path: UDP receive — recv → PSRAM ring buffer → I2S pump.
  * Modes: TONE (no stream), STREAM (connected), SILENCE (stream ended, until next connect) */
 #define RING_SIZE (256 * 1024)   /* ~2.7s of 48k/16b/stereo audio, in PSRAM */
 
 static uint8_t *ring_buf = NULL;
 static volatile int ring_head = 0, ring_tail = 0;   /* head=write, tail=read */
 static SemaphoreHandle_t ring_mutex;
-/* #8: the `volatile` flags in this file (play_mode, net_state, last_pkt_ms,
+/* The `volatile` flags in this file (play_mode, net_state, last_pkt_ms,
    vu_level, pump_chunks, ring_head/tail, cfg_loaded, ap_active) hand off
    single values between tasks with no lock. That is safe because on Xtensa
    (ESP32-S3) an ALIGNED 32-bit — or narrower — load/store is single-word
-   atomic (see also E-15). If this code is ever ported off Xtensa, the
+   atomic If this code is ever ported off Xtensa, the
    guarantee must be re-established explicitly (_Atomic or a critical
    section); a 64-bit handoff would ALREADY be unsafe here. */
 static volatile int play_mode = 0;  /* 0=tone, 1=stream, 2=silence */
 static volatile uint32_t pump_chunks = 0;  /* diag: pump loop iterations */
 
+/* Bytes currently queued in the ring. Caller must hold ring_mutex. */
 static inline int ring_used(void) { int d = ring_head - ring_tail; if (d < 0) d += RING_SIZE; return d; }
+/* Bytes still writable; one slot is kept free so full and empty differ.
+   Caller must hold ring_mutex. */
 static inline int ring_free(void) { return RING_SIZE - 1 - ring_used(); }
 
+    /* Copy up to len bytes into the ring (producer: the UDP task).
+       Returns bytes actually written - short only when the ring is full,
+       which is the backpressure signal to the sender. */
 static int ring_write(const uint8_t *src, int len)
 {
     int written = 0;
@@ -73,6 +94,9 @@ static int ring_write(const uint8_t *src, int len)
     return written;
 }
 
+    /* Copy up to len bytes out of the ring (consumer: the I2S pump).
+       Returns bytes actually read - short when the ring holds less, which
+       is how the pump detects an underrun and emits silence. */
 static int ring_read(uint8_t *dst, int len)
 {
     int r = 0;
@@ -94,12 +118,12 @@ static int ring_read(uint8_t *dst, int len)
 #define PIN_DIN    6
 #define PIN_SD     15
 #define PIN_RGB    48   /* onboard WS2812 RGB LED */
-#define PIN_BOOT    0   /* onboard BOOT button, active low (P4: factory reset) */
+#define PIN_BOOT    0   /* onboard BOOT button, active low hold 5 s to factory-reset */
 
 /* LED state: RGB shows connection state when idle, audio VU when streaming */
 static led_strip_handle_t rgb_led = NULL;
 /* net_state / last_pkt_ms / vu_level: same Xtensa single-word-atomicity
-   assumption as the flags documented above the ring globals (#8). */
+   assumption as the flags documented above the ring globals. */
 static volatile uint8_t vu_level = 0;    /* smoothed audio level 0..255 */
 static volatile int net_state = 0;       /* 0=wifi down, 1=waiting, 2=streaming */
 static volatile uint32_t last_pkt_ms = 0;/* last accepted RTP packet (ms), for live-stream detect */
@@ -113,6 +137,8 @@ static volatile uint32_t last_pkt_ms = 0;/* last accepted RTP packet (ms), for l
    without clipping. */
 #define PCM_GAIN    2
 
+    /* Apply the board's digital gain, saturating rather than wrapping.
+       Takes and returns one 16-bit sample. */
 static inline int16_t gain_clip(int32_t s)
 {
     s *= PCM_GAIN;
@@ -121,23 +147,22 @@ static inline int16_t gain_clip(int32_t s)
     return (int16_t)s;
 }
 
-/* ── P2+P3: NVS config, setup AP + captive portal, STA mode + failover ── */
+/* ── NVS config, setup AP + captive portal, STA mode + failover ── */
 #define CFG_NS          "cfg"
 #define CFG_BLOB_KEY    "wifi"
 #define AP_SSID         "AudioNode-Setup"
 #define AP_GATEWAY      "192.168.4.1"
 #define STA_FAIL_TIMEOUT_MS 30000       /* no IP in 30 s => revert to setup AP */
-#define FACTORY_HOLD_MS 5000            /* P4: BOOT hold that erases NVS */
+#define FACTORY_HOLD_MS 5000            /* BOOT hold that erases NVS */
 
-/* Persisted config blob (SSID, password, server ip). `version` guards the layout:
-   cfg_load rejects any blob whose size or version doesn't match (#12/#13) — a
-   reordered/retyped struct used to load as silent garbage. Old unversioned blobs
-   (v1) fail the check by design -> one-time re-provision via setup AP. */
-/* Bumped to 3: added server_port (wired to udp_task bind, was deleted in P16
-   because it was stored-but-ignored; this time it's actually consumed) and
-   node_name. Existing v2 blobs are rejected by the version/size check in
-   cfg_load -> one re-provision through the setup AP (NVS kept on failure).
-   See docs/PROJECT_STATE.md (decision D-3). */
+/* Persisted config blob (SSID, password, server IP, port, node name).
+   `version` guards the layout: cfg_load rejects any blob whose size or version
+   doesn't match, so a reordered or retyped struct can never load as silent
+   garbage. Older blobs fail that check by design, which costs one re-provision
+   through the setup AP and nothing else.
+   Currently 3: v3 added server_port (now genuinely consumed by the UDP bind;
+   an earlier attempt stored it without using it and was removed) and
+   node_name. See docs/PROJECT_STATE.md (decision D-3). */
 #define CFG_VERSION 3
 typedef struct {
     uint8_t version;      /* must equal CFG_VERSION */
@@ -156,6 +181,7 @@ static volatile int ap_active = 0;      /* 1 = setup AP running */
 static EventGroupHandle_t wifi_events;
 #define WIFI_CONNECTED_BIT BIT0
 
+    /* Persist node_cfg to NVS as one versioned blob. Returns an esp_err_t. */
 static esp_err_t cfg_save(void)
 {
     node_cfg.version = CFG_VERSION;
@@ -168,6 +194,9 @@ static esp_err_t cfg_save(void)
     return e;
 }
 
+    /* Load node_cfg from NVS. Returns ESP_ERR_NOT_FOUND when there is no usable
+       config (first boot, factory reset, or a stale blob) - the caller's
+       signal to raise the setup access point. */
 static esp_err_t cfg_load(void)
 {
     nvs_handle_t h;
@@ -175,9 +204,9 @@ static esp_err_t cfg_load(void)
     size_t len = sizeof(node_cfg);
     esp_err_t e = nvs_get_blob(h, CFG_BLOB_KEY, &node_cfg, &len);
     nvs_close(h);
-    /* #13: ESP_OK alone proves nothing — IDF v6.1 nvs_api.cpp copies a SHORTER
+    /* ESP_OK alone proves nothing — IDF v6.1 nvs_api.cpp copies a SHORTER
        stored blob into our buffer and returns OK (leaving a stale tail), and
-       only a LONGER one errors. So also require the exact size (#12) and the
+       only a LONGER one errors. So also require the exact size and the
        version byte; anything else is treated as no config -> setup AP. */
     if (e != ESP_OK) return e;
     if (len != sizeof(node_cfg) || node_cfg.version != CFG_VERSION) {
@@ -191,6 +220,8 @@ static esp_err_t cfg_load(void)
     return ESP_OK;
 }
 
+    /* esp_event callback: starts the STA connection, reacts to disconnects
+       and lost IP, and logs AP-side station joins and leaves. */
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
@@ -256,7 +287,7 @@ static esp_err_t sta_mode_start(void)
     return ESP_OK;
 }
 
-/* ── P2: Setup AP + captive portal ─────────────────────────────── */
+/* ── Setup AP + captive portal ─────────────────────────────── */
 static esp_err_t portal_get_handler(httpd_req_t *req)
 {
     const char *html =
@@ -307,10 +338,12 @@ static size_t url_decode(const char *src, char *out, size_t max)
     return o;
 }
 
-/* #15: strict dotted-quad check for the portal's server_ip field.
+/* Strict dotted-quad check for the portal's server_ip field.
    lwIP's inet_pton is lax (ip4addr_aton also accepts partial and hex forms),
    so user input is validated here — where feedback is possible — and must be
    STRICTER than the boot-time parse in cfg_apply_server_whitelist. */
+    /* Strict dotted-quad validation for user input: returns 1 for exactly four
+       decimal octets, 0 otherwise. */
 static int valid_ipv4(const char *s)
 {
     unsigned v[4] = {0, 0, 0, 0};
@@ -333,6 +366,9 @@ static int valid_ipv4(const char *s)
     return n_octets == 3 && digits > 0;
 }
 
+    /* HTTP POST /save on the setup AP: validate, store the config, reboot
+       into STA mode. Always returns ESP_OK - failures are reported to
+       the browser as HTTP 400 with nothing saved. */
 static esp_err_t portal_save_handler(httpd_req_t *req)
 {
     static char *keys[] = { "ssid", "password", "server_ip", "node_name", "server_port", NULL };
@@ -374,7 +410,7 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "missing ssid");
         return ESP_OK;
     }
-    /* #15: reject a malformed server_ip with a 400 BEFORE anything is saved
+    /* Reject a malformed server_ip with a 400 BEFORE anything is saved
        (previously it saved fine and then silently degraded to accept-any at
        boot, when cfg_apply_server_whitelist's inet_pton failed). */
     if (vals[2][0] && !valid_ipv4(vals[2])) {
@@ -424,6 +460,9 @@ static esp_err_t portal_save_handler(httpd_req_t *req)
 /* /debug — minimal live diagnostics over the setup-AP HTTP server (registered in
    setup_ap_start via register_debug_route). Read net/play/ring state + the
    configured port/name/whitelist from a phone on AudioNode-Setup; no USB needed. */
+    /* HTTP GET /debug: send a JSON snapshot of config and live state so a
+       phone can confirm a save without a serial cable.
+       Returns ESP_OK once the JSON has been written. */
 static esp_err_t debug_get_handler(httpd_req_t *req)
 {
     char json[384];
@@ -439,12 +478,16 @@ static esp_err_t debug_get_handler(httpd_req_t *req)
     httpd_resp_send(req, json, HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
+    /* Attach the /debug handler to the setup AP's HTTP server. */
 static void register_debug_route(httpd_handle_t hd)
 {
     httpd_uri_t uri = { .uri = "/debug", .method = HTTP_GET, .handler = debug_get_handler };
     httpd_register_uri_handler(hd, &uri);
 }
 
+    /* Bring up the open setup access point, its 192.168.4.1 address and the
+       HTTP portal. Called on first boot, after a factory reset, and on
+       station-mode failure. */
 static void setup_ap_start(void)
 {
     ap_active = 1;
@@ -471,7 +514,7 @@ static void setup_ap_start(void)
     dns.ip = (esp_ip_addr_t)ESP_IP4ADDR_INIT(192, 168, 4, 1);   /* captive dns */
     esp_netif_set_dns_info(ap_if, ESP_NETIF_DNS_MAIN, &dns);
 
-    /* Captive portal: HTTP server on :80. Static handle + stop-first (#28): if
+    /* Captive portal: HTTP server on :80. Static handle + stop-first : if
        this ever runs twice in one boot (future AP-restart logic), the old
        server would leak its task and sockets. Inert today (single call). */
     static httpd_handle_t hd = NULL;
@@ -490,7 +533,7 @@ static void setup_ap_start(void)
     register_debug_route(hd);
 }
 
-/* ── P3: failover — STA no IP in 30 s → return to setup AP (keep NVS) ── */
+/* ── Failover: — STA no IP in 30 s → return to setup AP (keep NVS) ── */
 static void failover_task(void *arg)
 {
     int64_t sta_start = 0;
@@ -511,7 +554,7 @@ static void failover_task(void *arg)
     }
 }
 
-/* ── P4: factory reset — hold BOOT (GPIO0) 5 s → erase NVS → setup AP ── */
+/* ── Factory reset: — hold BOOT (GPIO0) 5 s → erase NVS → setup AP ── */
 static void factory_reset_task(void *arg)
 {
     /* BOOT is active-low with an external pull-up on the DevKitC-1. */
@@ -554,7 +597,9 @@ static void factory_reset_task(void *arg)
     }
 }
 
-/* M1 check: print RSSI every 10s */
+/* Log the associated AP's RSSI every 10 s: proof of association and a live
+   view of the link budget. */
+    /* Log the associated AP's signal strength every 10 s. */
 static void rssi_task(void *arg)
 {
     while (1) {
@@ -568,6 +613,8 @@ static void rssi_task(void *arg)
 
 static i2s_chan_handle_t tx_chan;
 
+    /* Configure I2S0 as a 48 kHz 16-bit Philips-standard TX channel with no
+       MCLK. Aborts on failure (ESP_ERROR_CHECK). */
 static void i2s_init(void)
 {
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
@@ -589,7 +636,10 @@ static void i2s_init(void)
     ESP_ERROR_CHECK(i2s_channel_enable(tx_chan));
 }
 
-void audio_pump_task(void *arg)
+    /* The audio task: emit the boot tone, or pull PCM out of the ring with
+       digital gain, or emit silence - paced purely by I2S DMA
+       backpressure. Never blocks on the network. */
+static void audio_pump_task(void *arg)
 {
     /* Duplicate sample to L+R slots; MAX98357A mixes to mono speaker output */
     static int16_t sine_tab[48];   /* 48000 Hz / 1000 Hz = 48 samples per cycle */
@@ -675,6 +725,7 @@ void audio_pump_task(void *arg)
 
 /* RGB LED: idle → connection state (red=wifi down, blue breathing=waiting);
    streaming → VU meter (green=quiet → red=loud), driven by smoothed peak */
+    /* Initialise the on-board WS2812 status LED. */
 static void rgb_init(void)
 {
     led_strip_config_t strip_cfg = { .strip_gpio_num = PIN_RGB, .max_leds = 1 };
@@ -687,6 +738,8 @@ static void rgb_init(void)
     }
 }
 
+    /* Status LED: solid red with no Wi-Fi, blue breathing while waiting for a
+       stream, green-to-red VU meter while audio is playing. */
 static void led_task(void *arg)
 {
     int phase = 0;
@@ -717,11 +770,14 @@ static void led_task(void *arg)
     }
 }
 
-/* P1: RTP L16 over UDP receiver — board is a UDP listener (server sends TO the board).
+/* RTP L16 over UDP receiver. — board is a UDP listener (server sends TO the board).
    Replaces the TCP client transport. The board listens on UDP 1234;
    the sender sends RTP datagrams (PT=96, 48kHz/16-bit/mono, 20ms frames) to
    board_ip:1234. Every datagram is validated before feeding PCM to the ring.
    Missing packets -> silence fill; never block I2S on a lost UDP packet. */
+    /* The network task: bind UDP, receive RTP datagrams, validate each one,
+       silence-fill gaps, and write PCM into the ring. Never blocks the
+       pump. */
 static void udp_task(void *arg)
 {
     /* UDP socket bound to port 1234. socket() failing is as fatal as bind()
@@ -804,10 +860,13 @@ static void udp_task(void *arg)
         if ((rx_buf[0] >> 6) != 2) continue;                  /* version != 2  */
         if ((rx_buf[1] & 0x7F) != RTP_PT) continue;           /* PT != 96       */
 
+        /* Sequence number only: bytes 4..7 (timestamp) and 8..11 (SSRC) are
+           deliberately not checked. Timestamp continuity is implied by the
+           sequence check below, and an SSRC whitelist would break a sender
+           that restarts mid-session. See docs/ARCHITECTURE.md. */
         uint16_t seq = (rx_buf[2] << 8) | rx_buf[3];
-        (void)rx_buf;  /* ts parsed below but not used for diagnostics */
 
-        /* Source-IP whitelist (0 = accept any; set by NVS in P3) */
+        /* Source-IP whitelist (0 = accept any; set from NVS) */
         if (configured_server_ip &&
             peer.sin_addr.s_addr != configured_server_ip) {
             continue;
@@ -824,7 +883,7 @@ static void udp_task(void *arg)
                 if (gap > 64) gap = 1;  /* cap runaway gap */
                 dropped += gap;
                 /* Fill missing frames with silence, capped by the ring's free
-                   space (#17): the 64-frame worst case is 122 KB and would
+                   space the 64-frame worst case is 122 KB and would
                    saturate the ring so the REAL packet written next gets 0
                    bytes. ring_write() already returns partial when full — the
                    cap keeps the fill from ever being why a live packet is lost. */
@@ -861,6 +920,8 @@ static void udp_task(void *arg)
     close(sock);
 }
 
+    /* Entry point: load the config, start Wi-Fi in the right mode, then create
+       the portal, LED, RSSI, factory-reset, pump and UDP tasks. */
 void app_main(void)
 {
     printf("audio_node: WiFi streamer start\n");

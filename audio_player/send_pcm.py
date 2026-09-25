@@ -10,9 +10,12 @@ import socket, struct, sys, math, time
 SR = 48000; FRAME_SAMPLES = 960; FRAME_BYTES = FRAME_SAMPLES * 2; RTP_PT = 96; SSRC = 0xDEADBEEF
 
 def make_rtp_header(seq, ts):
+    """Build a 12-byte RTP header (V=2, PT=96) for this fixed-SSRC sender."""
     return struct.pack("!BBHII", 0x80, RTP_PT, seq & 0xFFFF, ts, SSRC)
 
 def make_tone_frame(freq, vol, start_sample):
+    """One 20 ms frame of a sine wave, as 16-bit LE mono PCM bytes.
+        `start_sample` keeps the wave phase continuous across frames."""
     out = bytearray(); amp = int(32000 * vol)
     for i in range(FRAME_SAMPLES):
         v = int(amp * math.sin(2 * math.pi * freq * (start_sample + i) / SR))
@@ -20,6 +23,7 @@ def make_tone_frame(freq, vol, start_sample):
     return out
 
 def tone_mode(ip, port, seconds, freq, vol):
+    """Stream a generated tone for `seconds`, paced in real time. Returns nothing."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print(f"sending RTP tone {freq}Hz to {ip}:{port} for {seconds}s (vol={vol})", flush=True)
     seq = 0; ts = 0; start_sample = 0; t0 = time.time()
@@ -35,6 +39,8 @@ def tone_mode(ip, port, seconds, freq, vol):
     finally: sock.close()
 
 def file_mode(path, ip, port, vol):
+    """Decode a file with ffmpeg and stream it, paced in real time.
+        Returns nothing."""
     import subprocess, imageio_ffmpeg
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -63,6 +69,8 @@ def file_mode(path, ip, port, vol):
     finally: proc.kill(); sock.close()
 
 def loop_mode(ip, port, vol):
+    """Capture the PC's default WASAPI loopback device and stream it (Windows
+        only; needs numpy and PyAudioWPatch). Returns nothing."""
     import numpy as np, pyaudiowpatch as pyaudio
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     print(f"sending RTP loopback to {ip}:{port} (vol={vol})", flush=True)

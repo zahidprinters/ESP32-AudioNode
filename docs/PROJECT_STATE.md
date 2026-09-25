@@ -38,8 +38,9 @@ is in flight. The open items are packaging and product decisions, in §8.
   Wi-Fi drops never erase NVS.
 - **RTP receive** — 48 kHz / 16-bit / mono / 20 ms frames, 821 packets over 20 s with
   zero drops, byte-exact against the sent frame count. Every datagram validated
-  (version, PT, length, source IP whitelist, seq/ts); losses are silence-filled and the
-  pump never blocks.
+  (version, PT, length, source IP whitelist, payload size, sequence continuity);
+  losses are silence-filled and the pump never blocks. The timestamp and SSRC are not
+  checked, by design — docs/ARCHITECTURE.md records why.
 - **Stream end** — the jitter buffer is flushed so audio stops promptly.
 - **LED** — solid red (Wi-Fi down), blue breathing (waiting), green→yellow→red VU
   (streaming), decided by packet recency rather than a sticky flag.

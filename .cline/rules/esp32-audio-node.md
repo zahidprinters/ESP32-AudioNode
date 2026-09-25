@@ -64,8 +64,9 @@ A separate 5 V supply for the amp **must** share ground with the board.
   `ts` +960 (samples) per frame; SSRC random per sender.
 - **The board is the listener** (the server sends to it). Datagrams from any source IP
   other than the configured server are dropped.
-- Validated per datagram: length, RTP version, PT, payload size, source IP, seq/ts
-  continuity. Loss is silence-filled; the I2S task never waits for a packet.
+- Validated per datagram: length, RTP version, PT, source IP, payload size, sequence
+  continuity. Timestamp and SSRC are NOT checked, on purpose. Loss is silence-filled;
+  the I2S task never waits for a packet.
 - LED: red = Wi-Fi down, blue breathing = waiting, VU = streaming (by packet recency,
   not a sticky flag).
 

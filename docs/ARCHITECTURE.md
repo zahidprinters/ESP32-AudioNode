@@ -82,22 +82,40 @@ real send rate over a loopback UDP socket (expects ~50 frames/s).
 
 ## Packet validation (receiver)
 
-The board's UDP RX task validates each datagram before feeding it to the ring buffer. A datagram that fails any check is discarded (silence-filled) and counted.
+The board's UDP RX task validates each datagram before feeding it to the ring buffer. A datagram that fails any check is discarded and the loss is silence-filled and counted.
 
-Checks, in order:
+Checks, **in the order the firmware applies them** (`udp_task` in `firmware/main/main.c`):
 
-1. **UDP length ≥ RTP header** (≥ 12 bytes). Too short = malformed, discard.
-2. **RTP version = 2**. The top 2 bits of byte 0 must be 0b10. Else discard.
-3. **Payload type = 96**. Mismatch = wrong stream, discard.
-4. **Payload length** is a multiple of 2 bytes (16-bit samples) and within the expected frame-size window (≈ 1 920 bytes). Too small/large = discard.
-5. **Source IP = configured server IP**. Packets from any other IP are ignored.
-6. **Sequence + timestamp sanity**.
-   - Expected next seq = last_seq + 1.
-   - seq < expected → old/reordered packet, discard.
-   - seq > expected → gap (missed frames); fill silence, count the gap.
-   - Timestamp should advance by 960 per seq step. A backwards timestamp or one inconsistent with the sequence = discard.
+1. **Datagram length ≥ 12** — the RTP header size. Shorter = malformed, discard.
+2. **RTP version = 2** — the top two bits of byte 0 must be `0b10`. Else discard.
+3. **Payload type = 96** — the low seven bits of byte 1. Mismatch = another stream, discard.
+4. **Source IP = the configured server IP**. Any other address is dropped. This is a
+   whitelist, not a hint: it is what stops a second device on the LAN from injecting
+   audio. `0` (no server saved) means accept anything.
+5. **Payload length ≥ 1920 bytes** (one full 20 ms frame). Shorter is dropped, because
+   a partial frame would shift every later sample.
+6. **Sequence continuity**, against `last_seq`:
+   - `seq == last_seq + 1` — in order, write the payload to the ring.
+   - `seq == last_seq` — a duplicate, discard.
+   - `seq > last_seq + 1` — a gap. Count the missing frames (capped at 64) and
+     silence-fill them, bounded by the ring's free space so the fill can never be the
+     reason a live packet is lost.
+   - Anything else — treated as a gap of one frame.
 
-Never trust a UDP datagram. The worst case of a bad validation is silence for one frame — acceptable. The worst case of trusting a bad datagram is corrupted audio.
+### What is deliberately **not** checked
+
+| Field | Why not |
+|---|---|
+| **Timestamp** (bytes 4–7) | Redundant with the sequence check: a sender that skips 960 per frame *is* the behaviour being verified, and a receiver comparing timestamps would add a second failure mode for no extra safety. The sender emits a correct, continuous timestamp (`docs/SETUP.md` documents it) and the receiver trusts the sequence number. |
+| **SSRC** (bytes 8–11) | The sender picks a **random SSRC per process** and a new one on every seek or volume change. Pinning an SSRC would break every restart mid-session. |
+| **Marker bit**, padding, extension | Constant in this design (`player.py` never sets them). A sender that set them would still be read correctly, because the payload is taken as a fixed 1920 bytes. |
+| **Sample rate / channels** | Fixed by the protocol, not carried per-packet; the receiver always assumes 48 kHz mono. |
+
+If the wire format ever changes, the receiver is the single place to change — see the
+byte-order note below.
+
+Never trust a UDP datagram. The worst case of a bad validation is silence for one frame
+— acceptable. The worst case of trusting a bad datagram is corrupted audio.
 
 ## Jitter / ring buffer
 

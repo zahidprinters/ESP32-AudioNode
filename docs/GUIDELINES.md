@@ -42,9 +42,10 @@ RTP L16 over UDP, 48 kHz / 16-bit / mono / 20 ms frames = 960 samples = 1920 byt
   SSRC random per sender.
 - Destination: board IP :1234, or the port stored by the setup portal. The datagram's
   source IP must equal the board's configured server IP — a whitelist, not a hint.
-- The receiver validates every datagram (length, version, PT, payload size, source IP,
-  seq/ts continuity) before any PCM reaches the ring buffer. Invalid = discard and
-  silence-fill.
+- The receiver validates every datagram (length, version, PT, source IP, payload size,
+  sequence continuity) before any PCM reaches the ring buffer. Invalid = discard and
+  silence-fill. The timestamp and SSRC are deliberately not checked — see
+  ARCHITECTURE.md for why.
 - A missing packet is filled with silence. The audio task must never wait for it.
 
 `sdkconfig.defaults` is load-bearing: frames are 1932 bytes, over the 1500-byte MTU, so
@@ -142,7 +143,7 @@ audio_player/             the PC server
   uninstall_startup.ps1   remove it
   start_audioplayer.bat   one-click launcher (Windows): pick Python, verify the
                           packages, start, open the UI, stop on Ctrl+C
-docs/                     ARCHITECTURE, SETUP, GUIDELINES, PROJECT_STATE
+docs/                     ARCHITECTURE, FUNCTION_MAP, SETUP, GUIDELINES, PROJECT_STATE
 tools/env.ps1             ESP-IDF environment for this machine
 logs/                     git-ignored session scratch; also logs/app.log, written
                           by the server on every start (and on a blocked one)

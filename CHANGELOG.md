@@ -7,6 +7,46 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### Documentation pass, function map, and a false claim in the docs (2026-09-25)
+
+Documentation and comment work; **no behaviour change** (the firmware binary is
+byte-identical at 0xdcc00 before and after).
+
+- **The documents claimed validation the receiver never performs.** Five files said the
+  board validates "seq/ts continuity" or "sequence/timestamp continuity". It does not:
+  `udp_task` never reads bytes 4-7. `docs/ARCHITECTURE.md` now lists the six checks in
+  the order the code applies them, plus a table of what is deliberately *not* checked
+  (timestamp, SSRC, marker/padding, sample rate) and why — a random per-process SSRC and
+  a seek-continuous timestamp would both break a strict check. The same correction went
+  into `README.md`, `firmware/README.md`, `docs/GUIDELINES.md`, `docs/PROJECT_STATE.md`
+  and `.cline/rules/esp32-audio-node.md`.
+- **Removed the dead statement that backed the false claim**: `(void)rx_buf;` carried
+  the comment "ts parsed below but not used for diagnostics", but nothing ever parsed it.
+- **`docs/FUNCTION_MAP.md` (new)** — every function in both trees: what it is for, what
+  it returns, the task inventory with what may not block what, and a "where to change
+  what" index. Linked from the README and the layout section of the guidelines.
+- **18 firmware functions** now carry a purpose/return comment, and the file header
+  describes the whole application plus a section map. The two single-line ring helpers
+  were given real comments. `audio_pump_task` is now `static` like every other internal
+  task.
+- **21 references to the deleted audit register removed** from `main.c` (`#8`, `#12/#13`,
+  `#13`, `#15`, `#17`, `#25`, `#28`, `#29`, `E-15`, and the `M*`/`P*` milestone tags).
+  The technical rationale each one carried was kept — only the dangling ticket numbers
+  went.
+- **53 docstrings added** across the server: 39 in `app.py` (every route, socket handler
+  and background thread), 9 in `player.py`, 5 in `send_pcm.py`. **31 comments** added to
+  `app.js`, which already documented the rest.
+- **Dead code removed**: `Player.bytes_sent` (a public property nothing read),
+  `RTP_BIT_DEPTH` and `RTP_CHANNELS` (defined in `config.py`, never used anywhere).
+- **Self-check hardened**: it never imported `app.py`, so a syntax error in a module the
+  other checks do not touch passed the whole run — which is exactly what happened while
+  doing this work (`compileall` caught it, the self-test did not). `test_modules_import`
+  now imports every module and would have failed.
+
+Verified: `idf.py build` (`Project build complete`), `selftest` all checks pass,
+`compileall` clean, and the server launched end to end with `GET /` plus all six API
+endpoints returning 200.
+
 ### Dependency verification, first-run guidance and logging (2026-09-25)
 
 Asked whether every package was actually verified. It was not, and the list itself was

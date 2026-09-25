@@ -265,8 +265,27 @@ def test_deps():
               not imported and mod not in hard)
 
 
+def test_modules_import():
+    """Every module must at least import.
+
+    This is the cheapest possible guard, and it matters: the other checks only
+    import config/player, so a syntax error in a module they never touch (a
+    mis-indented docstring in app.py, say) used to pass the whole run.
+    """
+    print("Every module imports cleanly:")
+    import importlib
+    for name in ("config", "library", "player", "deps", "app"):
+        try:
+            importlib.import_module("audio_player." + name)
+            ok, why = True, ""
+        except Exception as e:
+            ok, why = False, "%s: %s" % (type(e).__name__, e)
+        check("audio_player.%s imports" % name, ok, why)
+
+
 def main():
     print("audio_player selftest\n")
+    test_modules_import()
     test_rtp_header()
     test_frame_math()
     test_pacing()

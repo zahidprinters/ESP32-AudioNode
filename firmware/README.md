@@ -107,8 +107,10 @@ reboots into the setup AP.
 | Default silence | sent when frames are missing — the pump never blocks I2S |
 
 Every datagram is validated (RTP version, payload type, **source IP against the
-configured server**, sequence/timestamp continuity). Loss is filled with silence
-rather than stalled, and the jitter buffer is flushed when the stream ends so
+configured server**, payload size, sequence continuity — the timestamp and SSRC are
+deliberately not checked; see [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md)).
+Loss is filled with silence rather than stalled, and the jitter buffer is flushed
+when the stream ends so
 audio stops promptly.
 
 ## Files
