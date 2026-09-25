@@ -39,6 +39,12 @@ Open <http://localhost:5000>, point **Library** at a folder of audio, add the bo
 under **Nodes**, pick a track and press play. ffmpeg arrives with the
 `imageio-ffmpeg` package; nothing needs to be installed system-wide.
 
+On Windows you can skip the command line: double-click
+**`audio_player\start_audioplayer.bat`**. It starts the server and opens the UI in your
+browser; stop it with Ctrl+C in that window, or close the window. Run
+`audio_player\install_startup.ps1` once if you would rather have it start automatically
+at logon.
+
 The app keeps its state next to its source (`nodes.json`, `eq_presets.json`,
 `settings.json`, `media/`) — all git-ignored — so a source checkout needs write
 access to the repository folder.

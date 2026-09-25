@@ -7,6 +7,40 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### One-click Windows launcher (2026-09-25)
+
+`start_audioplayer.bat` never actually worked. It `cd`-ed **into** `audio_player\`,
+where `python -m audio_player.app` cannot resolve the package, so every run died with
+`ModuleNotFoundError: No module named 'audio_player'`. Three further defects surfaced
+while testing the fix:
+
+- An unescaped `)` inside a parenthesised `if` block (`echo ... (no browser) for ...`)
+  terminated the block early, so cmd tried to run `for the Windows logon task.` and
+  aborted with "for was unexpected at this time". The launcher no longer uses
+  parenthesised blocks at all.
+- The file had LF-only line endings. `.gitattributes` forces `eol=lf` globally, but
+  cmd.exe parses batch labels and blocks by line; `*.bat` / `*.cmd` are now pinned to
+  `eol=crlf`.
+- `/min` used `start /min …`, which *detached* the server into a hidden window: no
+  console, no output, and nothing to press — only Task Manager. It now runs in the
+  foreground like the normal path and only suppresses the browser.
+
+What it does now, verified end to end on Windows:
+
+- Runs from the repository root (one level above the package).
+- Resolves **one** interpreter to a full path: a repo `.venv` first, then the first
+  `python` on PATH, then the `py` launcher. This matters because `python` is not the
+  same interpreter in every shell — with the ESP-IDF environment sourced, the venv at
+  `C:\Espressif\tools\python\v6.1\venv` shadows it and has no `flask`.
+- Verifies the packages up front. A missing install used to surface as a
+  `ModuleNotFoundError` from inside the server; it now prints the interpreter it chose
+  and the exact `pip install` command to run.
+- Prints a banner with the UI URL and how to stop, opens the browser once the port is
+  bound, runs in the foreground, and stops cleanly on **Ctrl+C** or window close —
+  the port is released and nothing is left running.
+- `install_startup.ps1` now passes `/min`, so the logon task starts the server quietly
+  and no browser pops up at logon; the task also cannot hang on the end-of-run prompt.
+
 ### Production cleanup pass (2026-09-25)
 
 Documentation and dead-weight removal only; no behaviour change.

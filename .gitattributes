@@ -2,6 +2,11 @@
 # Without this, a Windows checkout converts to CRLF and re-adds files as modified.
 * text=auto eol=lf
 
+# Windows batch files must keep CRLF in the working tree: cmd.exe parses
+# labels and parenthesised blocks by line, and LF-only files misbehave.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
 # Binary assets: never convert, never diff.
 *.png  binary
 *.jpg  binary

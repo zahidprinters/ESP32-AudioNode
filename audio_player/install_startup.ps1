@@ -27,8 +27,10 @@ if (-not (Test-Path $bat)) { throw "start_audioplayer.bat not found next to this
 $trigger = if ($AtStartup) { New-ScheduledTaskTrigger -AtStartup }
            else            { New-ScheduledTaskTrigger -AtLogOn }
 
+# /min: no browser window at logon, and the launcher exits instead of
+# pausing on a prompt nobody is there to answer.
 $action = New-ScheduledTaskAction -Execute 'cmd.exe' `
-                                  -Argument ('/c "' + $bat + '"') `
+                                  -Argument ('/c ""' + $bat + '"" /min') `
                                   -WorkingDirectory $root
 
 $settings = New-ScheduledTaskSettingsSet `

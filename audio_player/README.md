@@ -27,6 +27,21 @@ python -m audio_player.app               # UI at http://localhost:5000
 audio-player                             # same thing, when installed
 ```
 
+### On Windows: click and go
+
+Double-click **`start_audioplayer.bat`**. It picks a Python interpreter, checks it has
+what the server needs, starts the server, and opens the UI in your browser. Leave the
+window open while you listen; **stop it with Ctrl+C in that window**, or just close the
+window — either way the server shuts down and releases the port.
+
+If the Python it finds does not have the server's packages, it says so in one line and
+gives you the exact command to fix it, rather than failing with a traceback. A `.venv`
+in the repository root is preferred when present, which makes the choice deterministic.
+
+To have it start by itself at logon (or at boot with `-AtStartup`), run
+`install_startup.ps1`; `uninstall_startup.ps1` removes that task again. The task starts
+the server quietly, without opening a browser.
+
 | Flag | Meaning |
 |---|---|
 | `--host` | HTTP bind address (default `0.0.0.0`) |
@@ -64,7 +79,7 @@ of it before doing anything else with it.
 | `send_pcm.py` | standalone bench sender — `tone`, `file`, `loop` — no browser needed |
 | `selftest.py` | the runnable self-check (see below) |
 | `templates/index.html`, `static/app.js`, `static/style.css` | the single-page UI |
-| `start_audioplayer.bat` | Windows launcher (`/min` to start minimised) |
+| `start_audioplayer.bat` | Windows one-click launcher: resolves a Python, verifies the packages, starts the server, opens the UI, and stops cleanly on Ctrl+C or window close. `/min` starts quietly with no browser (used by the logon task) |
 | `install_startup.ps1` / `uninstall_startup.ps1` | register / remove a Windows scheduled task so the server starts at logon (add `-AtStartup` for boot, which needs admin) |
 | `media/`, `nodes.json`, `eq_presets.json`, `settings.json` | runtime user state, git-ignored |
 

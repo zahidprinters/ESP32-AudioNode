@@ -139,7 +139,8 @@ audio_player/             the PC server
   send_pcm.py             CLI sender: tone / file / loopback
   install_startup.ps1     register a logon/startup task (Windows)
   uninstall_startup.ps1   remove it
-  start_audioplayer.bat   launcher
+  start_audioplayer.bat   one-click launcher (Windows): pick Python, verify the
+                          packages, start, open the UI, stop on Ctrl+C
 docs/                     ARCHITECTURE, SETUP, GUIDELINES, PROJECT_STATE
 tools/env.ps1             ESP-IDF environment for this machine
 logs/                     git-ignored session scratch
