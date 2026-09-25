@@ -35,6 +35,12 @@ python -m pip install -r requirements.txt
 python -m audio_player.app
 ```
 
+If the packages are missing, the server refuses to start and tells you the exact command
+to fix it rather than failing with an import error; every start is recorded in
+`logs/app.log`. To let it install them for you, run
+`python -m audio_player.app --install-deps`. A `.venv` in the repository root is used
+automatically when present, which also makes the interpreter choice deterministic.
+
 Open <http://localhost:5000>, point **Library** at a folder of audio, add the board
 under **Nodes**, pick a track and press play. ffmpeg arrives with the
 `imageio-ffmpeg` package; nothing needs to be installed system-wide.

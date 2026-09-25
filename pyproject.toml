@@ -24,15 +24,17 @@ classifiers = [
     "Topic :: Multimedia :: Sound/Audio :: Players",
 ]
 dependencies = [
-    "numpy",
-    "imageio-ffmpeg",
-    "Flask",
-    "Flask-SocketIO",
-    "eventlet",
-    "simple-websocket",
-    "requests",
+    # Must match requirements.txt and audio_player/deps.py. The self-check
+    # fails if these three lists drift apart.
+    "Flask>=3.0",
+    "Flask-SocketIO>=5.3.6",
+    "imageio-ffmpeg>=0.6",
+    "simple-websocket>=1.0",
 ]
-optional-dependencies = {windows_loopback = ["pyaudiowpatch"]}
+
+# Only for the Windows loopback mode of audio_player/send_pcm.py. Neither
+# numpy nor PyAudioWPatch is imported by the server or the web app.
+optional-dependencies = {windows_loopback = ["numpy>=1.24", "pyaudiowpatch"]}
 
 [project.scripts]
 audio-player = "audio_player.app:main"

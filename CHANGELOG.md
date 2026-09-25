@@ -7,6 +7,44 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### Dependency verification, first-run guidance and logging (2026-09-25)
+
+Asked whether every package was actually verified. It was not, and the list itself was
+wrong in both directions.
+
+- **`audio_player/deps.py` (new)** — the single source of truth for what the server
+  needs, shared by the app, the self-check and the Windows launcher so those three
+  cannot drift. Standard library only, so it can *report* a missing package instead of
+  dying on an `ImportError` three frames deep.
+- **Verified on every entry point**, not just the launcher: `python -m audio_player.app`,
+  the `audio-player` script and `start_audioplayer.bat` all check first. On success the
+  interpreter and package versions are appended to `logs/app.log`; on failure the missing
+  names, the exact fix command and the fact that it was logged are printed, and
+  `startup BLOCKED: …` is written to the same log — a failed first start is now a record.
+- **`--install-deps`** installs the requirements into the running interpreter. Opt-in,
+  never automatic: silently `pip install`-ing into whatever `python` resolves to could
+  modify a system install or another tool's virtual environment, so the command is
+  always shown and never run behind the user's back.
+- **The dependency list was wrong.** Removed **eventlet** (never imported — the app runs
+  `async_mode="threading"`, and eventlet is deprecated) and **requests** (never imported
+  anywhere). Moved **numpy** out of the hard requirements: the server and the web app
+  never import it; it is only used by the optional Windows loopback mode of the CLI
+  sender, alongside PyAudioWPatch. A fresh install now pulls four direct dependencies
+  instead of seven. `app.py`'s header comment still claimed the stack was "(eventlet)".
+- **The launcher now walks its interpreter candidates** and takes the first one that can
+  import the packages, instead of trusting the first `python` on `PATH`. Demonstrated on
+  this machine: sourcing the ESP-IDF environment puts `C:\Espressif\tools\python\v6.1\venv`
+  ahead of the real interpreter, and that venv has no `flask` — the launcher used to stop
+  there even though a working Python was installed. It now skips it and starts.
+- **Self-check extended** with a drift guard: `deps.py`, `requirements.txt` and
+  `pyproject.toml` must declare the same set, and `eventlet` / `requests` / `numpy` must
+  be neither imported nor required by the server. It found the stale eventlet comment on
+  its first run.
+
+Verified: `selftest` all checks pass (45), `compileall` clean, `--install-deps` against
+this interpreter, the blocked path against the ESP-IDF interpreter, and the launcher
+end to end (server up, `GET /` 200) with the ESP-IDF venv shadowing `python`.
+
 ### One-click Windows launcher (2026-09-25)
 
 `start_audioplayer.bat` never actually worked. It `cd`-ed **into** `audio_player\`,

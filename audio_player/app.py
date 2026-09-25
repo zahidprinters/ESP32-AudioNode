@@ -1,7 +1,10 @@
 # audio_player — browser-based RTP/UDP audio server for ESP32 AudioNode boards.
 #
-# Stack (V1): Flask + Flask-SocketIO (eventlet) + ffmpeg via imageio-ffmpeg.
-# Run:  python -m audio_player.app        (from d:/esp-idf, or any cwd)
+# Stack: Flask + Flask-SocketIO in threading mode (no eventlet) + ffmpeg via
+# imageio-ffmpeg. Dependencies are verified by audio_player/deps.py before
+# anything else starts, so a fresh machine is told what to install instead of
+# failing on an ImportError.
+# Run:  python -m audio_player.app        (from the repository root)
 # UI:   http://localhost:5000
 #
 # The UI talks to this backend two ways:
@@ -15,12 +18,14 @@
 import datetime
 import os
 import re
+import sys
 import time
 import socket
 import logging
 import threading
 import subprocess
 
+from audio_player import deps
 from audio_player.config import (cfg, RTP_SRATE, RTP_PORT, EQ_BANDS,
                                  EQ_MIN_DB, EQ_MAX_DB, EQ_BUILTIN_PRESETS,
                                  eq_save, node_save, node_load, eq_load,
@@ -29,6 +34,23 @@ from audio_player.library import scan_library
 from audio_player.player import Player
 
 _log = logging.getLogger("audio_player")
+
+
+def _setup_file_log():
+    """Send our own messages to logs/app.log as well as the console.
+
+    Deliberately not the root logger: that would also capture werkzeug's
+    per-request access log and the file would grow without bound.
+    """
+    path = deps.log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fh = logging.FileHandler(path, encoding="utf-8")
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        logging.getLogger("audio_player").addHandler(fh)
+    except OSError as e:
+        _log.warning("file logging disabled (%s): %s", path, e)
 
 
 def create_app():
@@ -541,7 +563,19 @@ def main():
     ap.add_argument("--library", help="default library root (UI can change it)")
     ap.add_argument("--node", action="append", metavar="IP[:PORT]",
                     help="replace the node list (repeatable); default = config.py")
+    ap.add_argument("--install-deps", action="store_true",
+                    help="install the required Python packages into this "
+                         "interpreter and exit")
     args = ap.parse_args()
+
+    if args.install_deps:
+        sys.exit(0 if deps.install() else 1)
+    # Verify the packages before anything else, on every entry point - not
+    # just the Windows launcher - so a fresh machine gets one clear message
+    # instead of a ModuleNotFoundError from inside the server.
+    if not deps.ensure():
+        sys.exit(1)
+    _setup_file_log()
 
     if args.library:
         cfg.library_root = args.library

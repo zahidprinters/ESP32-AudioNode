@@ -132,6 +132,7 @@ firmware/                 ESP-IDF project (target esp32s3)
   sdkconfig               generated — do not edit by hand
 audio_player/             the PC server
   app.py                  Flask + Socket.IO: REST, WebSocket, scheduler
+  deps.py                 the dependency list + its verification (single source)
   player.py               the single ffmpeg -> RTP L16/UDP pipeline
   library.py              folder scan + durations
   config.py               all tunables + user-state persistence
@@ -143,7 +144,8 @@ audio_player/             the PC server
                           packages, start, open the UI, stop on Ctrl+C
 docs/                     ARCHITECTURE, SETUP, GUIDELINES, PROJECT_STATE
 tools/env.ps1             ESP-IDF environment for this machine
-logs/                     git-ignored session scratch
+logs/                     git-ignored session scratch; also logs/app.log, written
+                          by the server on every start (and on a blocked one)
 tmp/                      git-ignored experiments
 ```
 

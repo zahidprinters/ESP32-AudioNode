@@ -48,6 +48,39 @@ the server quietly, without opening a browser.
 | `--port` | HTTP port (default 5000) |
 | `--library` | initial media folder; the UI can change it later |
 | `--node IP[:PORT]` | replace the node list; repeatable, default port 1234 |
+| `--install-deps` | install the required packages into this interpreter, then exit |
+
+## First run on a new machine
+
+The required packages are **Flask, Flask-SocketIO and imageio-ffmpeg**; `simple-websocket`
+is optional (without it Socket.IO falls back to long polling). `numpy` and
+`PyAudioWPatch` are only needed for the Windows loopback mode of the CLI sender.
+
+Every entry point — the launcher, `python -m audio_player.app`, the `audio-player`
+script — verifies this before doing anything else, using the one list in `deps.py`:
+
+- **All present** → it starts, and records the interpreter and package versions in
+  [`logs/app.log`](../logs/README.md).
+- **Something missing** → it does not start. Instead of a traceback you get the missing
+  names, the exact command to fix it, and a note if only an optional one is absent. The
+  same outcome is written to `logs/app.log`, so a failed first start is still a record.
+- **The Windows launcher** additionally walks the interpreters it can find and picks the
+  first one that can import them, because `python` on `PATH` is not the same interpreter
+  in every shell — a tool's venv can shadow the real one.
+
+To let the server install them for you, into that exact interpreter:
+
+```powershell
+python -m audio_player.app --install-deps
+```
+
+That is deliberately **opt-in, never automatic**: silently `pip install`-ing into
+whatever `python` resolves to could modify a system install or another tool's virtual
+environment. The command is always shown to the user, never run behind their back.
+
+`selftest.py` asserts that `deps.py`, `requirements.txt` and `pyproject.toml` declare the
+same set, so the list cannot drift into claiming packages the app never imports.
+
 
 A board's address must be the **real current LAN IP of the board**, and the board's
 saved Server IP must be the **real current LAN IP of this PC**. Discovery
@@ -72,6 +105,7 @@ of it before doing anything else with it.
 
 | File | Role |
 |---|---|
+| `deps.py` | the dependency list and its verification: what is required, what is optional, the exact install command, and the log line written on every start |
 | `app.py` | Flask + Flask-SocketIO server: REST routes, WebSocket handlers, 250 ms position loop, 1 s status tick, scheduler thread |
 | `player.py` | the one and only ffmpeg → RTP L16/UDP pipeline (`rtp_header()`, `Player`): real-time pacing, filter chain, seek, pause/resume |
 | `library.py` | recursive media-folder scan, durations and sizes via ffmpeg |

@@ -29,22 +29,21 @@ set "URL=http://localhost:5000"
 set "OPENUI=1"
 if /i "%~1"=="/min" set "OPENUI=0"
 
-REM ---- pick ONE interpreter ----------------------------------------------
-REM Order: a .venv next to this repo, then the first python on PATH, then
-REM the py launcher. Always resolved to a full path: "python" on PATH is
-REM not the same interpreter in every shell (the ESP-IDF venv shadows it),
-REM and only this one is guaranteed to have the server's packages.
+REM ---- pick an interpreter that ACTUALLY HAS the packages ----------------
+REM A .venv in this repo wins outright. Otherwise try every python on PATH
+REM and take the first one that can import them: "python" is not the same
+REM interpreter in every shell (sourcing the ESP-IDF environment puts its
+REM own venv, which has no flask, in front of the real one).
+REM audio_player/deps.py owns the list, so this can never drift from what
+REM the server itself requires.
 set "PYEXE="
 if exist "%CD%\.venv\Scripts\python.exe" set "PYEXE=%CD%\.venv\Scripts\python.exe"
-if not defined PYEXE for /f "delims=" %%p in ('where python 2^>nul') do if not defined PYEXE set "PYEXE=%%p"
-if not defined PYEXE for /f "delims=" %%p in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do if not defined PYEXE set "PYEXE=%%p"
-if not defined PYEXE goto no_python
+if not defined PYEXE for /f "delims=" %%p in ('where python 2^>nul') do if not defined PYEXE call :usable "%%p"
+if not defined PYEXE for /f "delims=" %%p in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do if not defined PYEXE call :usable "%%p"
+if not defined PYEXE goto no_usable
 
-REM ---- that interpreter must actually have the packages ------------------
-REM Checked up front so a missing install produces one clear line
-REM instead of a ModuleNotFoundError from deep inside the server.
-"%PYEXE%" -c "import flask, flask_socketio, imageio_ffmpeg, numpy" >nul 2>nul
-if errorlevel 1 goto no_deps
+REM Records this start in logs\app.log, and catches anything :usable missed.
+"%PYEXE%" -c "from audio_player.deps import ensure; import sys; sys.exit(0 if ensure() else 1)"
 
 echo.
 echo   AudioNode PC server
@@ -66,25 +65,37 @@ echo   AudioNode server stopped.
 if "%OPENUI%"=="1" pause
 goto :eof
 
+REM ---- subroutine: keep %PYEXE% only if this interpreter can import them --
+:usable
+if defined PYEXE goto :eof
+"%~1" -c "from audio_player.deps import missing; import sys; sys.exit(0 if not missing() else 1)" >nul 2>nul && set "PYEXE=%~1"
+goto :eof
+
+REM ---- no candidate worked: explain precisely which case this is ---------
+:no_usable
+set "PYEXE="
+for /f "delims=" %%p in ('where python 2^>nul') do if not defined PYEXE set "PYEXE=%%p"
+if not defined PYEXE for /f "delims=" %%p in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do if not defined PYEXE set "PYEXE=%%p"
+if not defined PYEXE goto no_python
+REM A Python exists but is missing packages: let deps.py say exactly which.
+"%PYEXE%" -c "from audio_player.deps import ensure; import sys; sys.exit(0 if ensure() else 1)" >nul
+goto failed
+
 :no_python
 echo.
-echo   ERROR: no Python interpreter was found.
+echo   ERROR: no Python interpreter was found on this machine.
 echo   Install Python 3.11 or newer from python.org, tick
 echo   "Add python.exe to PATH", then run this file again.
 goto failed
 
-:no_deps
+:failed
+echo   The server was not started. The reason is above and was recorded
+echo   in logs\app.log.
 echo.
-echo   ERROR: this Python is missing the packages the server needs.
+echo   To install the missing packages into this Python:
 echo.
-echo   Interpreter: %PYEXE%
-echo   Fix it with:
-echo.
-echo       "%PYEXE%" -m pip install -r requirements.txt
+echo       "%PYEXE%" -m audio_player.app --install-deps
 echo.
 echo   then run this file again.
-goto failed
-
-:failed
 if "%OPENUI%"=="1" pause
 exit /b 1

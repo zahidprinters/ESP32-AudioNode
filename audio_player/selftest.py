@@ -214,6 +214,57 @@ def test_eq():
             cf.eq_save()
 
 
+def test_deps():
+    """The dependency list must be identical in deps.py, requirements.txt
+    and pyproject.toml. Three copies of one list is three chances to rot;
+    this is the check that stops it."""
+    print("Dependencies (deps.py == requirements.txt == pyproject.toml):")
+    from audio_player import deps
+    import tomllib
+
+    def names(specs):
+        out = set()
+        for s in specs:
+            n = re.split(r"[<>=!~\[; ]", s.strip(), 1)[0].strip().lower()
+            if n:
+                out.add(n)
+        return out
+
+    # 1. required packages really are importable here
+    check("all REQUIRED packages import", not deps.missing(),
+          "missing=%s" % [d for d, _ in deps.missing()])
+    check("ensure() passes on this machine", deps.ensure())
+    check("install_command() points at requirements.txt",
+          "requirements.txt" in deps.install_command())
+
+    # 2. requirements.txt declares exactly deps' list
+    req_lines = [ln for ln in deps.REQUIREMENTS.read_text(encoding="utf-8")
+                 .splitlines()
+                 if ln.strip() and not ln.strip().startswith("#")]
+    req = names(req_lines)
+    want = names([d for d, _ in deps.REQUIRED + deps.RECOMMENDED])
+    check("requirements.txt matches deps.py", req == want,
+          "req-only=%s deps-only=%s" % (sorted(req - want), sorted(want - req)))
+
+    # 3. pyproject.toml declares the same set
+    proj = tomllib.loads((deps.ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    check("pyproject dependencies match requirements.txt",
+          names(proj["project"]["dependencies"]) == req,
+          "proj=%s" % sorted(names(proj["project"]["dependencies"])))
+
+    # 4. nothing the app never imports is declared as a hard dependency.
+    #    Look for real import statements, not the bare word: a comment that
+    #    says "no eventlet" must not trip this.
+    src = "\n".join((deps.ROOT / "audio_player" / f).read_text(encoding="utf-8")
+                    for f in ("app.py", "config.py", "library.py", "player.py"))
+    hard = names([d for d, _ in deps.REQUIRED])
+    for mod in ("eventlet", "requests", "numpy"):
+        imported = re.search(r"^\s*(?:import\s+%s\b|from\s+%s\b)"
+                             % (mod, mod), src, re.M)
+        check("'%s' is neither imported nor required" % mod,
+              not imported and mod not in hard)
+
+
 def main():
     print("audio_player selftest\n")
     test_rtp_header()
@@ -221,6 +272,7 @@ def main():
     test_pacing()
     test_position_across_restart()
     test_eq()
+    test_deps()
     test_ui_id_contract()
     test_config()
     print("")

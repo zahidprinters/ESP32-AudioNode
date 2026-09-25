@@ -1,11 +1,18 @@
 # ESP32 AudioNode PC app. Install: python -m pip install -r requirements.txt
 # Minimum versions, not a reproducible lockfile.
-numpy>=1.24
-imageio-ffmpeg>=0.6
+#
+# These three are the only hard requirements; audio_player/deps.py verifies
+# exactly this set at startup and reports anything missing.
 Flask>=3.0
 Flask-SocketIO>=5.3.6
-eventlet>=0.35
-simple-websocket>=1.0
-requests>=2.28
+imageio-ffmpeg>=0.6
 
-# Optional Windows loopback: python -m pip install PyAudioWPatch
+# Optional: enables the Socket.IO WebSocket transport. Without it the UI
+# still works, falling back to long polling.
+simple-websocket>=1.0
+
+# Optional, and only for the Windows loopback mode of the CLI sender
+# (audio_player/send_pcm.py loop), which also needs PyAudioWPatch:
+#     python -m pip install numpy PyAudioWPatch
+#
+# numpy and PyAudioWPatch are NOT required by the server or the web app.
