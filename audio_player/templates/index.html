@@ -3,13 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AudioPlayer — ESP32 AudioNode</title>
+<!-- Tells the browser to render its own controls (scrollbars, spinners, the
+     native range track) in the same scheme the stylesheet picked. -->
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0b0d12" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f4f6fb" media="(prefers-color-scheme: light)">
+<meta name="description" content="Browser control panel for ESP32 AudioNode speakers.">
+<title>AudioNode — ESP32 Wi-Fi speaker control</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="app">
   <header class="menubar">
-    <span class="brand">AudioPlayer</span>
+    <span class="brand">
+      <!-- Inline SVG: scales, themes with currentColor, and costs no request.
+           A LAN box may be offline, so the UI must not depend on a CDN. -->
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+           stroke-linejoin="round" aria-hidden="true" focusable="false">
+        <path d="M11 5 6 9H2v6h4l5 4V5z"/>
+        <path d="M15.5 8.5a5 5 0 0 1 0 7"/>
+        <path d="M18.5 5.5a9 9 0 0 1 0 13"/>
+      </svg>
+      <span>AudioNode<small>ESP32 Wi-Fi speaker control</small></span>
+    </span>
     <nav class="menus">
       <div class="menu" data-menu>
         <button class="menubtn" type="button">File</button>

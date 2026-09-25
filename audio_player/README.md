@@ -174,6 +174,32 @@ The limiter is last on purpose: the board applies a fixed ×2 digital gain, so a
 ceiling means the DAC cannot be driven into clipping at any volume or EQ setting.
 `selftest.py` asserts the ordering.
 
+## UI
+
+One stylesheet, no build step, no framework, no CDN — a box on a home LAN must look
+right offline, and the self-check enforces that there are no external assets.
+
+- **Design tokens** in `:root` (colour, spacing, radii, shadows, motion). Change the
+  theme by editing those variables, not the rules.
+- **Dark by default, light via `prefers-color-scheme`.** `color-scheme` is declared in
+  the markup so native controls (scrollbars, spinners) match.
+- **Layout**: a full-height flex column — header, tabs, one scrolling pane, status bar.
+  Only the tab pane scrolls, so the controls never leave the screen.
+- **Type hierarchy**, tabular numerals for every time/level readout, and a themed
+  scrollbar.
+- **Controls**: styled range sliders (WebKit and Firefox), custom select chevron drawn
+  in CSS, primary/ghost/danger button variants, 40 px touch targets under 700 px.
+- **State is visible**: the selected track gets an accent bar, a streaming node gets a
+  green ring and glow, the status bar is a row of pills.
+- **Accessibility**: `:focus-visible` rings for keyboard users only, `aria-label`s on
+  the sliders, a live-region-ish error banner, and full
+  `prefers-reduced-motion` support.
+- **Print stylesheet** so the page prints as a readable list, without app chrome.
+
+The class names are shared with the DOM `app.js` builds at runtime. `selftest.py`
+checks that every class in the markup and in `app.js` has a rule, that the CSS parses,
+and that no asset is loaded from off-machine — a gap that otherwise fails silently.
+
 ## Self-check
 
 ```powershell

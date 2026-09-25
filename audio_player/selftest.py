@@ -283,6 +283,56 @@ def test_modules_import():
         check("audio_player.%s imports" % name, ok, why)
 
 
+def test_ui_styles():
+    """The stylesheet must actually cover the UI.
+
+    Two silent failures this prevents: a class the markup uses with no rule at
+    all (renders unstyled and nobody notices until someone looks), and CSS that
+    stops parsing because a brace is unbalanced.
+    """
+    print("Stylesheet covers the markup:")
+    css_path = os.path.join(HERE, "static", "style.css")
+    html_path = os.path.join(HERE, "templates", "index.html")
+    css = open(css_path, encoding="utf-8").read()
+    html = open(html_path, encoding="utf-8").read()
+    js = open(os.path.join(HERE, "static", "app.js"), encoding="utf-8").read()
+
+    check("CSS braces balanced", css.count("{") == css.count("}"),
+          "%d { vs %d }" % (css.count("{"), css.count("}")))
+
+    # Classes the markup uses...
+    used = set()
+    for m in re.findall(r'class="([^"]+)"', html):
+        used.update(m.split())
+    # ...plus the ones app.js assigns to the DOM it builds at runtime.
+    for m in re.findall(r'className\s*=\s*"([^"]+)"', js):
+        used.update(m.split())
+    for m in re.findall(r"classList\.(?:add|toggle|remove)\(\s*'([^']+)'", js):
+        used.add(m)
+    for m in re.findall(r'className\s*=\s*"([^"]*?)"\s*\+', js):
+        for part in re.findall(r'"([^"]*)"', m):
+            used.update(p for p in part.split() if p)
+    # State hooks are set/cleared by app.js rather than declared in a rule.
+    state = {"active", "playing", "sel", "open", "preamp"}
+    styled = set(re.findall(r"\.([A-Za-z_][\w-]*)", css))
+    missing = sorted(c for c in used - styled if c not in state)
+    check("every class in the markup/js has a CSS rule", not missing,
+          "unstyled=%s" % missing if missing else "%d classes" % len(used))
+
+    check("stylesheet defines dark and light themes",
+          "prefers-color-scheme: light" in css and "--accent:" in css)
+    check("stylesheet honours prefers-reduced-motion",
+          "prefers-reduced-motion" in css)
+    # An external asset is a LOAD reference (src/href/url()/@import), not prose
+    # that happens to contain a URL - the Help text legitimately names the
+    # board's own address.
+    external = re.findall(r'(?:src|href)\s*=\s*["\']https?://', html, re.I)
+    external += re.findall(r'url\(\s*["\']?https?://', css, re.I)
+    external += re.findall(r'@import', css, re.I)
+    check("no external assets (the UI must work offline)", not external,
+          "found %d" % len(external) if external else "all assets local")
+
+
 def main():
     print("audio_player selftest\n")
     test_modules_import()
@@ -293,6 +343,7 @@ def main():
     test_eq()
     test_deps()
     test_ui_id_contract()
+    test_ui_styles()
     test_config()
     print("")
     if FAILS:

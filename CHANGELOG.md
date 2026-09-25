@@ -7,6 +7,41 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### UI rebuilt: design system, dark + light, accessible (2026-09-25)
+
+Markup, CSS and the browser's own behaviour only — **no change to any API, route or
+element id**, so the app behaves exactly as before.
+
+- **`style.css` rewritten around design tokens** in `:root` — colour, spacing scale,
+  radii, shadows and motion timings. The theme is now changed by editing variables
+  instead of hunting hex codes through 18 sections.
+- **Dark by default, light via `prefers-color-scheme`.** Added `color-scheme` to the
+  document head so native controls (scrollbars, number spinners) match the theme, plus
+  `theme-color` for mobile.
+- **Layout rebuilt** as a full-height flex column: header, tab bar, one scrolling pane,
+  status bar. Cards, a gradient wash behind the page, a wider 1080 px measure, and a
+  tab underline that marks the active tab.
+- **Controls rewritten**: styled range sliders for both WebKit and Firefox, a select
+  chevron drawn in CSS (no image request), primary / ghost / danger button variants,
+  40 px touch targets below 700 px, and ellipsis for long track names.
+- **State is now visible at a glance**: the selected track gets an accent bar, a
+  streaming node gets a green ring and glow with a status dot, the status bar became a
+  row of pills, and the "now playing" card gained an accent bar in place of artwork
+  (an image would add a request and a broken-image state).
+- **Brand mark** added as inline SVG, themed with `currentColor` — no icon font, no
+  network request, because the box may be offline.
+- **Accessibility**: `:focus-visible` rings that appear for keyboard users only, full
+  `prefers-reduced-motion` support, a print stylesheet, and better contrast in light
+  mode.
+- **Self-check hardened** with `test_ui_styles`: it verifies the CSS parses (balanced
+  braces), that every class used by the markup *or* assigned by `app.js` at runtime has
+  a rule, that both themes and reduced-motion exist, and that nothing is loaded from
+  off-machine. It immediately caught a class the old stylesheet had dropped
+  (`.disclist`), which had been rendering unstyled.
+
+Verified: selftest all checks pass (57), `GET /` and `/static/style.css` both 200, and
+the element-id contract (43 ids) still holds.
+
 ### Documentation pass, function map, and a false claim in the docs (2026-09-25)
 
 Documentation and comment work; **no behaviour change** (the firmware binary is

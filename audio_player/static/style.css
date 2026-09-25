@@ -1,155 +1,579 @@
-/* AudioPlayer — minimal clean UI */
-* { box-sizing: border-box; }
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: #0f1115;
-  color: #e6e6e6;
-  font-size: 14px;
-  line-height: 1.5;
-}
-.app { max-width: 720px; margin: 24px auto; padding: 0 16px; }
-h1 { font-size: 20px; margin: 0 0 2px; color: #fff; }
-.sub { margin: 0 0 20px; color: #888; font-size: 12px; }
-.panel { background: #1a1d24; border: 1px solid #2a2e38; border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
-.panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: #9aa0af; margin: 0 0 10px; }
-.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.row label { display: flex; align-items: center; gap: 6px; color: #c8cad0; font-size: 12px; }
-input[type=text] {
-  flex: 1; min-width: 200px;
-  background: #0d0f13; border: 1px solid #2a2e38; color: #e6e6e6;
-  padding: 6px 8px; border-radius: 4px; font-size: 12px;
-}
-input[type=text]:focus { outline: none; border-color: #4a90d9; }
-button {
-  background: #2a2e38; color: #e6e6e6; border: 1px solid #3a3e48;
-  padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 12px;
-}
-button:hover { background: #353a45; }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-button.play { background: #2e7d32; border-color: #388e3c; color: #fff; font-weight: 600; }
-button.play:hover { background: #388e3c; }
-.muted { color: #777; font-size: 12px; margin: 4px 0; }
-.filelist { list-style: none; padding: 0; margin: 8px 0 0; max-height: 220px; overflow-y: auto; }
-.filelist li { display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 4px; }
-.filelist li:hover { background: #23272f; }
-.fname { flex: 1; font-weight: 500; color: #e6e6e6; word-break: break-word; }
-.fdur { color: #888; font-size: 11px; min-width: 42px; }
-.fsz { color: #666; font-size: 11px; min-width: 56px; text-align: right; }
-.now-playing { background: #0d0f13; border: 1px solid #2a2e38; border-radius: 4px; padding: 8px 10px; margin-bottom: 10px; min-height: 36px; }
-.now-src { color: #c8cad0; font-size: 13px; }
-.transport { display: flex; gap: 8px; margin-bottom: 10px; }
-.seek-row, .vol-row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-input[type=range] { flex: 1; accent-color: #4a90d9; }
-.vol-row label { color: #c8cad0; font-size: 12px; }
-#volLabel { min-width: 34px; text-align: right; }
-.error { background: #3a1a1a; color: #ffb3b3; border: 1px solid #5a2a2a; padding: 8px 10px; border-radius: 4px; font-size: 12px; margin-top: 10px; }
-nodelist { list-style: none; padding: 0; margin: 8px 0 0; }
-.node { background: #0d0f13; border: 1px solid #2a2e38; border-radius: 4px; padding: 8px 10px; margin-bottom: 6px; }
-.node.playing { border-color: #388e3c; }
-.nodehead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px; }
-.nodename { font-weight: 600; color: #e6e6e6; }
-.nodeip { color: #777; font-size: 11px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
-.nodebody { display: flex; gap: 14px; font-size: 11px; color: #9aa0af; }
-.nodestat { color: #cfcfcf; }
-.node.playing .nodestat { color: #81c784; }
-.nodepos { color: #777; }
-.transport { align-items: flex-start; }   /* keep Play/Stop from stretching */
-.transport button { align-self: center; }
-/* --- equalizer (VLC-style vertical sliders, dark) ------------------------ */
-.eq-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-.eq-enable { display: flex; align-items: center; gap: 5px; font-weight: 600; color: #e6e6e6; cursor: pointer; }
-.eq-head select {
-  background: #0d0f13; border: 1px solid #2a2e38; color: #e6e6e6;
-  padding: 5px 8px; border-radius: 4px; font-size: 12px;
-}
-.eq-sliders { display: flex; gap: 8px; align-items: stretch; overflow-x: auto; padding: 4px 2px; }
-.eqcol { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 48px; }
-.eqcol.preamp { border-right: 1px solid #2a2e38; padding-right: 10px; margin-right: 6px; }
-.eqcol input[type="range"] {
-  -webkit-appearance: slider-vertical;  /* legacy Chromium */
-  writing-mode: vertical-lr;            /* standardized: Chrome 119+, FF 130+ */
-  direction: rtl;                       /* min at the bottom, like VLC */
-  flex: none; width: 24px; height: 130px; padding: 0;
-}
-.eqdb { font-size: 11px; color: #9aa0af; white-space: nowrap; }
-.eqband { font-size: 11px; font-weight: 600; color: #c8cad0; white-space: nowrap; }
-.eq-hint { font-size: 12px; margin-top: 8px; }
-@media (max-width: 520px) {
-  .row { flex-direction: column; align-items: stretch; }
-  .row label { flex-direction: column; align-items: flex-start; }
-  input[type=text] { min-width: 0; }
+/* AudioPlayer UI
+ * ---------------------------------------------------------------------------
+ * One stylesheet, no build step, no external fonts or CDNs: the server runs on a
+ * home LAN and must look right offline.
+ *
+ * Layout:  full-height flex column (header / tabs / scrolling pane / footer).
+ *          Only the tab pane scrolls, so the controls never leave the screen.
+ * Palette: dark by default, light theme via prefers-color-scheme.
+ * Motion:  transitions disabled under prefers-reduced-motion.
+ *
+ * Class names are shared with the DOM app.js builds at runtime
+ * (.fname/.fdur/.fsz, .node*, .eqcol/.eqdb/.eqband, .sel, .open, .tab.active).
+ */
+
+/* --- 1. design tokens ---------------------------------------------------- */
+:root {
+  --bg:          #0b0d12;
+  --bg-glow:     #141a2b;
+  --surface:     #141821;
+  --surface-2:   #1a1f2b;
+  --surface-3:   #212736;
+  --border:      #262d3c;
+  --border-2:    #333c50;
+  --text:        #e8ebf2;
+  --text-dim:    #9aa3b8;
+  --text-mute:   #6b7488;
+  --accent:      #7c8cff;
+  --accent-2:    #a78bfa;
+  --accent-soft: rgba(124, 140, 255, .14);
+  --accent-ink:  #0b0d12;
+  --ok:          #34d399;
+  --warn:        #fbbf24;
+  --danger:      #f87171;
+  --danger-soft: rgba(248, 113, 113, .12);
+
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-pill: 999px;
+
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px;
+  --s-4: 16px; --s-5: 24px; --s-6: 32px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-2: 0 6px 20px rgba(0, 0, 0, .38);
+  --shadow-3: 0 18px 50px rgba(0, 0, 0, .5);
+
+  --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+  --t-fast: 120ms cubic-bezier(.4, 0, .2, 1);
+  --t-med:  200ms cubic-bezier(.4, 0, .2, 1);
+
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+          Arial, "Noto Sans", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
-/* --- app shell: menubar, tabs, footer, modals, fit-in-page ---------------- */
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:          #f4f6fb;
+    --bg-glow:     #e6ebff;
+    --surface:     #ffffff;
+    --surface-2:   #f7f9fd;
+    --surface-3:   #eef1f8;
+    --border:      #dfe4ef;
+    --border-2:    #c8d0e0;
+    --text:        #131722;
+    --text-dim:    #5a6377;
+    --text-mute:   #838c9e;
+    --accent:      #4f5fe0;
+    --accent-2:    #7c3aed;
+    --accent-soft: rgba(79, 95, 224, .10);
+    --accent-ink:  #ffffff;
+    --ok:          #0f9d70;
+    --warn:        #b45309;
+    --danger:      #dc2626;
+    --danger-soft: rgba(220, 38, 38, .08);
+    --shadow-1: 0 1px 2px rgba(16, 24, 40, .06);
+    --shadow-2: 0 6px 20px rgba(16, 24, 40, .08);
+    --shadow-3: 0 18px 50px rgba(16, 24, 40, .16);
+    --ring: 0 0 0 2px #fff, 0 0 0 4px var(--accent);
+  }
+}
+
+/* --- 2. reset ------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; }
 html, body { height: 100%; }
-body { overflow: hidden; display: flex; flex-direction: column; }  /* app fits the page; inner lists scroll */
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--bg);
+  /* two soft radial washes so the page is not a flat rectangle */
+  background-image:
+    radial-gradient(1100px 520px at 12% -10%, var(--bg-glow), transparent 62%),
+    radial-gradient(900px 480px at 92% 0%, var(--accent-soft), transparent 58%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;          /* only the tab pane scrolls */
+}
+
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -.01em; }
+code { font-family: var(--mono); font-size: .9em; }
+.muted { color: var(--text-dim); font-size: 13px; }
+
+/* Focus for keyboard users only - never a ring on a mouse click. */
+:focus-visible { outline: none; box-shadow: var(--ring); border-radius: var(--r-sm); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--border-2) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-2);
+  border: 3px solid transparent;
+  border-radius: var(--r-pill);
+  background-clip: content-box;
+}
+
+/* --- 3. app shell -------------------------------------------------------- */
 .app {
-  max-width: 860px; margin: 0 auto; padding: 0 12px;
-  flex: 1 1 auto; min-height: 0; width: 100%;
-  display: flex; flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 var(--s-5) var(--s-4);
+  display: flex;
+  flex-direction: column;
 }
+
+/* --- 4. header ------------------------------------------------------------ */
 .menubar {
-  display: flex; align-items: center; gap: 14px; flex: none;
-  padding: 6px 2px; border-bottom: 1px solid #2a2e38; margin-bottom: 8px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 700; color: #fff; }
-.menus { display: flex; gap: 2px; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: -.02em;
+}
+.brand svg { display: block; color: var(--accent); flex: none; }
+.brand small {
+  display: block;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-mute);
+  letter-spacing: .02em;
+}
+
+.menus { display: flex; gap: 2px; margin-left: auto; }
 .menu { position: relative; }
-.menubtn { background: none; border: none; padding: 4px 10px; font-size: 13px; }
-.menubtn:hover { background: #23272f; }
-.menu.open .menubtn { background: #2a2e38; }
+.menubtn {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-size: 14px;
+  padding: 6px 12px;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.menubtn:hover { background: var(--surface-2); color: var(--text); }
+.menu.open .menubtn { background: var(--surface-3); color: var(--text); }
+
 .dropdown {
-  display: none; position: absolute; top: 100%; left: 0; z-index: 30;
-  min-width: 190px; background: #1a1d24; border: 1px solid #2a2e38;
-  border-radius: 4px; padding: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+  display: none;
+  position: absolute;
+
+/* --- 5. tabs -------------------------------------------------------------- */
+.tabs { flex: none; display: flex; gap: var(--s-1); padding-top: var(--s-3); }
+.tab {
+  position: relative;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 8px 16px;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.tab:hover { background: var(--surface-2); color: var(--text); }
+.tab.active {
+  background: var(--surface);
+  border-color: var(--border);
+  color: var(--text);
+  font-weight: 600;
+}
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 16px; right: 16px; bottom: -1px;
+  height: 2px; border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+/* --- 6. panels (cards) --------------------------------------------------- */
+.tabpane { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-top: var(--s-3); }
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: var(--s-5);
+  box-shadow: var(--shadow-1);
+}
+.panel + .panel { margin-top: var(--s-4); }
+.panel h2 {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-mute); margin-bottom: var(--s-3);
+}
+.row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.row + .row, .row + .muted, .muted + .row { margin-top: var(--s-2); }
+.row label { color: var(--text-dim); font-size: 14px; }
+
+/* --- 7. buttons ----------------------------------------------------------- */
+button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  padding: 8px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--t-fast), border-color var(--t-fast),
+              transform var(--t-fast), box-shadow var(--t-fast);
+}
+button:hover:not(:disabled) { background: var(--surface-3); border-color: var(--text-mute); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Primary action: Play. Green reads as "go" and matches the board's streaming LED. */
+button.play {
+  background: linear-gradient(180deg, var(--ok), color-mix(in srgb, var(--ok) 78%, #000));
+  border-color: transparent;
+  color: #04120c;
+  font-weight: 650;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .18) inset, var(--shadow-1);
+}
+button.play:hover:not(:disabled) { filter: brightness(1.06); }
+
+button.noderem {
+  background: transparent; border-color: var(--border);
+  color: var(--text-dim); font-size: 13px; padding: 5px 10px;
+}
+button.noderem:hover:not(:disabled) {
+  background: var(--danger-soft); border-color: var(--danger); color: var(--danger);
+}
+
+/* --- 8. form controls ----------------------------------------------------- */
+input[type=text], input[type=number], select {
+  flex: 1 1 200px; min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+input[type=text]::placeholder { color: var(--text-mute); }
+input[type=text]:hover, input[type=number]:hover, select:hover { border-color: var(--text-mute); }
+input[type=text]:focus, input[type=number]:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  outline: none;
+}
+select {
+  flex: 0 0 auto; min-width: 170px; cursor: pointer; appearance: none;
+  /* inline chevron: no image request, no external asset */
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+
+/* --- 9. sliders (horizontal; the EQ reuses these rules vertically) --------- */
+input[type=range] {
+  flex: 1; min-width: 0; height: 24px; margin: 0;
+  background: transparent; appearance: none; cursor: pointer;
+}
+input[type=range]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: var(--r-pill);
+  background: var(--surface-3); border: 1px solid var(--border);
+}
+input[type=range]::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px; height: 18px; margin-top: -7px;
+  border-radius: 50%;
+  background: var(--text);
+  border: 3px solid var(--accent);
+  box-shadow: var(--shadow-1);
+  transition: transform var(--t-fast);
+}
+input[type=range]:hover::-webkit-slider-thumb { transform: scale(1.12); }
+input[type=range]:active::-webkit-slider-thumb { transform: scale(1.2); }
+input[type=range]::-moz-range-track {
+  height: 6px; border-radius: var(--r-pill);
+  background: var(--surface-3); border: 1px solid var(--border);
+}
+input[type=range]::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--text); border: 3px solid var(--accent);
+}
+
+/* --- 10. now playing + transport ------------------------------------------ */
+.now-playing {
+  display: flex; align-items: center; gap: var(--s-3);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  margin-bottom: var(--s-4);
+  min-height: 52px;
+}
+/* Accent bar stands in for artwork: no image, so no broken-image state. */
+.now-playing::before {
+  content: ""; flex: none; width: 8px; height: 30px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+}
+.nowSrc { color: var(--text); font-size: 16px; font-weight: 600; word-break: break-word; }
+.now-src { color: var(--text-dim); font-size: 15px; }
+
+.transport { display: flex; gap: var(--s-2); align-items: center; }
+.transport + .muted, .seek-row, .vol-row { margin-top: var(--s-3); }
+.seek-row, .vol-row { display: flex; align-items: center; gap: var(--s-3); }
+.seek-row .muted, .vol-row .muted {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px; white-space: nowrap;
+}
+.vol-row label { flex: none; }
+#volLabel { min-width: 42px; text-align: right; color: var(--text); }
+
+/* --- 11. lists (library, discovery, schedule) ---------------------------- */
+.filelist {
+  list-style: none; padding: 0; margin: var(--s-4) 0 0;
+  max-height: 40vh; overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.filelist li {
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: 9px var(--s-3);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--t-fast);
+}
+.filelist li:last-child { border-bottom: none; }
+.filelist li:hover { background: var(--surface-3); }
+/* selected track - class set by renderFiles() in app.js */
+.filelist li.sel {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.fname {
+  flex: 1; min-width: 0; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fdur {
+  color: var(--text-dim); font-size: 12px; min-width: 46px; text-align: right;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.fsz {
+  color: var(--text-mute); font-size: 12px; min-width: 62px; text-align: right;
+  font-family: var(--mono);
+}
+/* Discovery rows carry an "Add" button, so they need a taller hit area than a
+   plain track row. */
+.disclist li { min-height: 38px; }
+.disclist li.muted { color: var(--text-mute); cursor: default; }
+.disclist li.muted:hover { background: none; }
+
+/* --- 12. nodes ------------------------------------------------------------ */
+.nodelist { list-style: none; padding: 0; margin: var(--s-3) 0 0; }
+.node {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: var(--s-3);
+  margin-bottom: var(--s-2);
+  transition: border-color var(--t-med), box-shadow var(--t-med);
+}
+.node.playing {
+  border-color: var(--ok);
+  box-shadow: 0 0 0 1px var(--ok) inset, 0 0 22px -8px var(--ok);
+}
+.nodehead { display: flex; align-items: center; gap: var(--s-2); }
+.nodename { font-weight: 600; margin-right: auto; }
+.nodeip {
+  color: var(--text-mute); font-size: 12px;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.nodebody {
+  display: flex; gap: var(--s-4); margin-top: 6px;
+  font-size: 12px; color: var(--text-dim);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.node.playing .nodestat { color: var(--ok); }
+.nodestat::before {
+
+/* --- 13. equalizer -------------------------------------------------------- */
+.eq-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.eq-enable {
+  display: inline-flex; align-items: center; gap: var(--s-2);
+  font-weight: 600; cursor: pointer;
+}
+.eq-sliders {
+  display: flex; align-items: stretch; gap: var(--s-2);
+  margin-top: var(--s-5);
+  padding: var(--s-3) var(--s-2) var(--s-2);
+  overflow-x: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.eqcol {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  min-width: 52px; flex: none;
+}
+.eqcol.preamp {
+  border-right: 1px solid var(--border);
+  padding-right: var(--s-3);
+  margin-right: var(--s-1);
+}
+.eqcol input[type=range] {
+  /* Vertical: the standardized writing-mode wins where supported; the legacy
+     Chromium value stays first as the fallback. direction:rtl puts the minimum
+     at the bottom, like every other desktop equalizer. */
+  -webkit-appearance: slider-vertical;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  flex: none;
+  width: 26px;
+  height: 150px;
+}
+.eqdb {
+  font-size: 11px; color: var(--text-dim); white-space: nowrap;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.eqband { font-size: 11px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
+.eq-hint { margin-top: var(--s-3); }
+
+/* --- 14. status bar ------------------------------------------------------- */
+.statusbar {
+  flex: none;
+  display: flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) 0;
+  border-top: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-x: auto;
+}
+/* pills with a state dot, so the bar is scannable instead of a text blob */
+.stitem {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 3px 10px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.stitem::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-mute);
+}
+
+/* --- 15. error banner + modals ------------------------------------------- */
+.error {
+  flex: none;
+  margin: var(--s-3) 0 0;
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+  border-radius: var(--r-md);
+  padding: var(--s-3) var(--s-4);
+  font-size: 14px;
+}
+.modal {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-lg);
+  max-width: 520px;
+  padding: var(--s-5);
+  box-shadow: var(--shadow-3);
+}
+.modal::backdrop { background: rgba(3, 5, 10, .66); backdrop-filter: blur(3px); }
+.modal h2 { font-size: 18px; margin-bottom: var(--s-3); }
+.modal ol { padding-left: 1.2em; color: var(--text-dim); }
+.modal li { margin-bottom: 6px; }
+.modal code { background: var(--surface-3); border-radius: 5px; padding: 1px 5px; }
+.modal .closebtn { margin-top: var(--s-4); }
+
+/* --- 16. responsive ------------------------------------------------------- */
+@media (max-width: 700px) {
+  .app { padding: 0 var(--s-3) var(--s-3); }
+  .menubar { flex-wrap: wrap; gap: var(--s-2); }
+  .menus { margin-left: 0; width: 100%; }
+  .tabs { flex-wrap: wrap; }
+  .tab { flex: 1 1 auto; padding: 10px 12px; }
+  .panel { padding: var(--s-4); border-radius: var(--r-md); }
+  .row { flex-direction: column; align-items: stretch; gap: var(--s-2); }
+  .row label { flex-direction: column; align-items: flex-start; }
+  input[type=text], input[type=number], select { min-width: 0; width: 100%; }
+  .transport { flex-wrap: wrap; }
+  .filelist { max-height: none; }
+  .eqcol input[type=range] { height: 120px; width: 24px; }
+  .statusbar { gap: 6px; }
+  .stitem { font-size: 11px; padding: 3px 8px; }
+  button { min-height: 40px; }          /* comfortable touch target */
+}
+
+/* --- 17. respect the OS motion preference -------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* --- 18. print: a readable page, no app chrome --------------------------- */
+@media print {
+  body { background: #fff; color: #000; overflow: visible; }
+  .menubar, .tabs, .statusbar, .transport, button { display: none !important; }
+  .panel { border: 1px solid #999; box-shadow: none; }
+}
+
+  content: ""; display: inline-block; vertical-align: middle;
+  width: 6px; height: 6px; margin-right: 6px; border-radius: 50%;
+  background: currentColor;
+}
+.nodepos { color: var(--text-mute); }
+
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 210px;
+  padding: var(--s-1);
+  background: var(--surface);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
 }
 .menu.open .dropdown { display: block; }
 .dropdown button {
-  display: block; width: 100%; text-align: left; background: none;
-  border: none; padding: 6px 10px; font-size: 12px;
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; color: var(--text);
+  font-size: 14px; padding: 8px 10px;
 }
-.dropdown button:hover { background: #2a2e38; }
-.dropdown hr { border: none; border-top: 1px solid #2a2e38; margin: 4px 0; }
-.error { flex: none; }
-.tabs { display: flex; gap: 4px; flex: none; }
-.tab {
-  background: #14171d; border: 1px solid #2a2e38; border-bottom: none;
-  color: #9aa0af; padding: 6px 16px; border-radius: 6px 6px 0 0; font-size: 12px;
-}
-.tab.active { background: #1a1d24; color: #fff; font-weight: 600; }
-.tabpane {
-  flex: 1 1 auto; min-height: 0; overflow-y: auto;   /* only the pane scrolls */
-}
-.filelist, .nodelist { margin-bottom: 8px; }
-.disclist li { min-height: 26px; }
-.noderem { font-size: 11px; padding: 2px 8px; }
-.statusbar {
-  flex: none; display: flex; gap: 18px; padding: 5px 2px;
-  border-top: 1px solid #2a2e38; color: #9aa0af; font-size: 11px;
-  font-family: ui-monospace, Consolas, monospace;
-}
-.modal {
-  background: #1a1d24; color: #e6e6e6; border: 1px solid #2a2e38;
-  border-radius: 8px; max-width: 460px; padding: 16px 20px;
-}
-.modal::backdrop { background: rgba(0,0,0,.6); }
-.modal h2 { margin-top: 0; color: #fff; }
-.modal .closebtn { margin-top: 10px; }
-
-/* --- responsive: tablets and phones (no scroll trapping, tap targets) ----- */
-@media (max-width: 700px) {
-  .menubar { gap: 8px; flex-wrap: wrap; }
-  .brand { font-size: 14px; }
-  .menubtn { padding: 6px 12px; }             /* bigger tap target */
-  .tabs { flex-wrap: wrap; }
-  .tab { padding: 8px 14px; flex: 1 1 auto; }
-  .row { flex-direction: column; align-items: stretch; gap: 6px; }
-  .row label { flex-direction: column; align-items: flex-start; }
-  input[type=text], input[type=number], select { min-width: 0; width: 100%; }
-  .eq-sliders { gap: 4px; }
-  .eqcol { min-width: 40px; }
-  .eqcol input[type=range] { height: 110px; width: 20px; }
-  .statusbar { flex-wrap: wrap; gap: 8px 14px; }
-  button { min-height: 36px; }                 /* touch-friendly buttons */
-}
+.dropdown button:hover { background: var(--accent-soft); }
+.dropdown hr { border: none; border-top: 1px solid var(--border); margin: var(--s-1) 6px; }
