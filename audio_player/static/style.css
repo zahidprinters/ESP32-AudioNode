@@ -1,15 +1,22 @@
 /* AudioPlayer UI
  * ---------------------------------------------------------------------------
- * One stylesheet, no build step, no external fonts or CDNs: the server runs on a
- * home LAN and must look right offline.
+ * One stylesheet, no build step, no framework, no external fonts or CDNs: the
+ * server runs on a home LAN and must look right offline.
  *
- * Layout:  full-height flex column (header / tabs / scrolling pane / footer).
- *          Only the tab pane scrolls, so the controls never leave the screen.
+ * Layout:  a fixed sidebar plus a main column (top bar / one scrolling pane /
+ *          status bar). Only the pane scrolls, so the navigation never leaves.
+ *          Below 900px the sidebar becomes an off-canvas drawer.
  * Palette: dark by default, light theme via prefers-color-scheme.
- * Motion:  transitions disabled under prefers-reduced-motion.
+ *
+ * Section map:
+ *   1 tokens - 2 reset - 3 shell - 4 sidebar - 5 top bar + hamburger
+ *   6 panels - 7 buttons - 8 form controls - 9 sliders - 10 now playing
+ *   11 lists - 12 nodes - 13 equalizer - 14 status bar - 15 error + modals
+ *   16 responsive - 17 reduced motion - 18 print
  *
  * Class names are shared with the DOM app.js builds at runtime
- * (.fname/.fdur/.fsz, .node*, .eqcol/.eqdb/.eqband, .sel, .open, .tab.active).
+ * (.fname/.fdur/.fsz, .node*, .eqcol/.eqdb/.eqband, .sel, .open, .tab.active);
+ * selftest.py fails if any of them loses its rule.
  */
 
 /* --- 1. design tokens ---------------------------------------------------- */
@@ -48,6 +55,7 @@
   --ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
   --t-fast: 120ms cubic-bezier(.4, 0, .2, 1);
   --t-med:  200ms cubic-bezier(.4, 0, .2, 1);
+  --nav-w: 252px;
 
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
           Arial, "Noto Sans", sans-serif;
@@ -92,7 +100,7 @@ body {
   line-height: 1.55;
   color: var(--text);
   background: var(--bg);
-  /* two soft radial washes so the page is not a flat rectangle */
+  /* two soft washes so the page is not a flat rectangle */
   background-image:
     radial-gradient(1100px 520px at 12% -10%, var(--bg-glow), transparent 62%),
     radial-gradient(900px 480px at 92% 0%, var(--accent-soft), transparent 58%);
@@ -120,32 +128,41 @@ code { font-family: var(--mono); font-size: .9em; }
   background-clip: content-box;
 }
 
-/* --- 3. app shell -------------------------------------------------------- */
+/* --- 3. app shell: sidebar + main ---------------------------------------- */
 .app {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  max-width: 1080px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 0 var(--s-5) var(--s-4);
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--nav-w) minmax(0, 1fr);
 }
 
-/* --- 4. header ------------------------------------------------------------ */
-.menubar {
-  flex: none;
+.main {
+  min-width: 0;
+  min-height: 0;
   display: flex;
-  align-items: center;
-  gap: var(--s-4);
-  padding: var(--s-3) 0;
-  border-bottom: 1px solid var(--border);
+  flex-direction: column;
+  padding: 0 var(--s-5) var(--s-4);
+}
+
+/* --- 4. sidebar ---------------------------------------------------------- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  min-height: 0;
+  padding: var(--s-4) var(--s-3);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: var(--s-3);
+  padding: 0 var(--s-2);
   font-weight: 700;
   font-size: 16px;
   letter-spacing: -.02em;
@@ -159,54 +176,130 @@ code { font-family: var(--mono); font-size: .9em; }
   letter-spacing: .02em;
 }
 
-.menus { display: flex; gap: 2px; margin-left: auto; }
-.menu { position: relative; }
-.menubtn {
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  color: var(--text-dim);
-  font-size: 14px;
-  padding: 6px 12px;
-  transition: background var(--t-fast), color var(--t-fast);
-}
-.menubtn:hover { background: var(--surface-2); color: var(--text); }
-.menu.open .menubtn { background: var(--surface-3); color: var(--text); }
-
-.dropdown {
-  display: none;
-  position: absolute;
-
-/* --- 5. tabs -------------------------------------------------------------- */
-.tabs { flex: none; display: flex; gap: var(--s-1); padding-top: var(--s-3); }
+/* Nav buttons keep class="tab": app.js's showTab() resets className to exactly
+   "tab" / "tab active", so renaming them would break the active state. */
+.nav { display: flex; flex-direction: column; gap: 2px; }
 .tab {
-  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  width: 100%;
+  padding: 9px 12px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--r-sm);
   color: var(--text-dim);
   font-size: 14px;
   font-weight: 500;
-  padding: 8px 16px;
+  text-align: left;
   transition: background var(--t-fast), color var(--t-fast);
 }
+.tab svg { width: 18px; height: 18px; flex: none; opacity: .85; }
 .tab:hover { background: var(--surface-2); color: var(--text); }
 .tab.active {
-  background: var(--surface);
-  border-color: var(--border);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--text);
   font-weight: 600;
 }
-.tab.active::after {
+.tab.active svg { color: var(--accent); opacity: 1; }
+.tab.active > span { position: relative; }
+.tab.active > span::after {
   content: "";
   position: absolute;
-  left: 16px; right: 16px; bottom: -1px;
-  height: 2px; border-radius: var(--r-pill);
-  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  left: -12px; top: 50%;
+  width: 3px; height: 18px;
+  margin-top: -9px;
+  border-radius: var(--r-pill);
+  background: var(--accent);
 }
 
+/* --- 5. top bar + hamburger --------------------------------------------- */
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 60px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--s-3);
+}
+.page-title { font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+
+/* Three stacked lines that become an X when the drawer is open. They are spans
+   rather than a glyph so the shape is identical on every platform. */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  width: 40px; height: 40px;
+  padding: 0 9px;
+  background: none;
+  border: 1px solid var(--border);
+}
+.hamburger span {
+  display: block;
+  height: 2px; width: 100%;
+  border-radius: var(--r-pill);
+  background: var(--text);
+  transition: transform var(--t-med), opacity var(--t-fast);
+}
+.app.nav-open .hamburger span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+.app.nav-open .hamburger span:nth-child(2) { opacity: 0; }
+.app.nav-open .hamburger span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+/* Backdrop behind the off-canvas drawer. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: rgba(3, 5, 10, .6);
+  backdrop-filter: blur(2px);
+}
+.scrim[hidden] { display: none; }
+
+/* Overflow menu, pinned to the bottom of the sidebar. */
+.sidebar-more { margin-top: auto; }
+.menu { position: relative; }
+.menubtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-dim);
+  padding: 6px 10px;
+}
+.menubtn:hover { background: var(--surface-2); color: var(--text); }
+.menu.open .menubtn { background: var(--surface-3); color: var(--text); }
+.menubtn svg { width: 18px; height: 18px; }
+
+.dropdown {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0; right: 0;
+  z-index: 40;
+  min-width: 200px;
+  padding: var(--s-1);
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-3);
+}
+.menu.open .dropdown { display: block; }
+.dropdown button {
+  display: block; width: 100%; text-align: left;
+  background: none; border: none; color: var(--text);
+  font-size: 14px; padding: 8px 10px; border-radius: 6px;
+}
+.dropdown button:hover { background: var(--accent-soft); }
+.dropdown hr { border: none; border-top: 1px solid var(--border); margin: var(--s-1) 6px; }
+
 /* --- 6. panels (cards) --------------------------------------------------- */
-.tabpane { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-top: var(--s-3); }
+.tabpane { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-bottom: var(--s-4); }
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -223,7 +316,7 @@ code { font-family: var(--mono); font-size: .9em; }
 .row + .row, .row + .muted, .muted + .row { margin-top: var(--s-2); }
 .row label { color: var(--text-dim); font-size: 14px; }
 
-/* --- 7. buttons ----------------------------------------------------------- */
+/* --- 7. buttons ---------------------------------------------------------- */
 button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: var(--surface-2);
@@ -244,7 +337,7 @@ button:hover:not(:disabled) { background: var(--surface-3); border-color: var(--
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 
-/* Primary action: Play. Green reads as "go" and matches the board's streaming LED. */
+/* Primary action: Play. Green reads as "go" and matches the board's LED. */
 button.play {
   background: linear-gradient(180deg, var(--ok), color-mix(in srgb, var(--ok) 78%, #000));
   border-color: transparent;
@@ -262,7 +355,7 @@ button.noderem:hover:not(:disabled) {
   background: var(--danger-soft); border-color: var(--danger); color: var(--danger);
 }
 
-/* --- 8. form controls ----------------------------------------------------- */
+/* --- 8. form controls ---------------------------------------------------- */
 input[type=text], input[type=number], select {
   flex: 1 1 200px; min-width: 0;
   background: var(--bg);
@@ -287,8 +380,14 @@ select {
   background-image:
     linear-gradient(45deg, transparent 50%, currentColor 50%),
     linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 16px center, right 11px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
 
-/* --- 9. sliders (horizontal; the EQ reuses these rules vertically) --------- */
+/* --- 9. sliders (the equalizer reuses these rules vertically) ------------ */
 input[type=range] {
   flex: 1; min-width: 0; height: 24px; margin: 0;
   background: transparent; appearance: none; cursor: pointer;
@@ -317,7 +416,7 @@ input[type=range]::-moz-range-thumb {
   background: var(--text); border: 3px solid var(--accent);
 }
 
-/* --- 10. now playing + transport ------------------------------------------ */
+/* --- 10. now playing + transport ----------------------------------------- */
 .now-playing {
   display: flex; align-items: center; gap: var(--s-3);
   background: var(--surface-2);
@@ -381,13 +480,12 @@ input[type=range]::-moz-range-thumb {
   color: var(--text-mute); font-size: 12px; min-width: 62px; text-align: right;
   font-family: var(--mono);
 }
-/* Discovery rows carry an "Add" button, so they need a taller hit area than a
-   plain track row. */
+/* Discovery rows carry an "Add" button, so they need a taller hit area. */
 .disclist li { min-height: 38px; }
 .disclist li.muted { color: var(--text-mute); cursor: default; }
 .disclist li.muted:hover { background: none; }
 
-/* --- 12. nodes ------------------------------------------------------------ */
+/* --- 12. nodes ----------------------------------------------------------- */
 .nodelist { list-style: none; padding: 0; margin: var(--s-3) 0 0; }
 .node {
   background: var(--surface-2);
@@ -414,8 +512,13 @@ input[type=range]::-moz-range-thumb {
 }
 .node.playing .nodestat { color: var(--ok); }
 .nodestat::before {
+  content: ""; display: inline-block; vertical-align: middle;
+  width: 6px; height: 6px; margin-right: 6px; border-radius: 50%;
+  background: currentColor;
+}
+.nodepos { color: var(--text-mute); }
 
-/* --- 13. equalizer -------------------------------------------------------- */
+/* --- 13. equalizer ------------------------------------------------------- */
 .eq-head { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .eq-enable {
   display: inline-flex; align-items: center; gap: var(--s-2);
@@ -457,7 +560,7 @@ input[type=range]::-moz-range-thumb {
 .eqband { font-size: 11px; font-weight: 600; color: var(--text-dim); white-space: nowrap; }
 .eq-hint { margin-top: var(--s-3); }
 
-/* --- 14. status bar ------------------------------------------------------- */
+/* --- 14. status bar ------------------------------------------------------ */
 .statusbar {
   flex: none;
   display: flex; align-items: center; gap: var(--s-2);
@@ -486,7 +589,7 @@ input[type=range]::-moz-range-thumb {
 /* --- 15. error banner + modals ------------------------------------------- */
 .error {
   flex: none;
-  margin: var(--s-3) 0 0;
+  margin: 0 0 var(--s-3);
   background: var(--danger-soft);
   color: var(--danger);
   border: 1px solid var(--danger);
@@ -510,13 +613,30 @@ input[type=range]::-moz-range-thumb {
 .modal code { background: var(--surface-3); border-radius: 5px; padding: 1px 5px; }
 .modal .closebtn { margin-top: var(--s-4); }
 
-/* --- 16. responsive ------------------------------------------------------- */
+/* --- 16. responsive ------------------------------------------------------ */
+/* Below 900px the sidebar becomes an off-canvas drawer and the hamburger
+   appears in the top bar. `.nav-open` on .app is the single state flag: it
+   drives the drawer, the hamburger's X and the scrim, so they cannot disagree. */
+@media (max-width: 900px) {
+  .app { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed;
+    top: 0; bottom: 0; left: 0;
+    z-index: 50;
+    width: 272px;
+    border-right: 1px solid var(--border-2);
+    box-shadow: var(--shadow-3);
+    transform: translateX(-100%);
+    transition: transform var(--t-med);
+  }
+  .app.nav-open .sidebar { transform: none; }
+  .hamburger { display: flex; }
+  .main { padding: 0 var(--s-4) var(--s-3); }
+  .page-title { font-size: 18px; }
+}
+
 @media (max-width: 700px) {
-  .app { padding: 0 var(--s-3) var(--s-3); }
-  .menubar { flex-wrap: wrap; gap: var(--s-2); }
-  .menus { margin-left: 0; width: 100%; }
-  .tabs { flex-wrap: wrap; }
-  .tab { flex: 1 1 auto; padding: 10px 12px; }
+  .main { padding: 0 var(--s-3) var(--s-3); }
   .panel { padding: var(--s-4); border-radius: var(--r-md); }
   .row { flex-direction: column; align-items: stretch; gap: var(--s-2); }
   .row label { flex-direction: column; align-items: flex-start; }
@@ -527,6 +647,7 @@ input[type=range]::-moz-range-thumb {
   .statusbar { gap: 6px; }
   .stitem { font-size: 11px; padding: 3px 8px; }
   button { min-height: 40px; }          /* comfortable touch target */
+  .hamburger { width: 44px; height: 44px; }
 }
 
 /* --- 17. respect the OS motion preference -------------------------------- */
@@ -542,38 +663,7 @@ input[type=range]::-moz-range-thumb {
 /* --- 18. print: a readable page, no app chrome --------------------------- */
 @media print {
   body { background: #fff; color: #000; overflow: visible; }
-  .menubar, .tabs, .statusbar, .transport, button { display: none !important; }
+  .sidebar, .topbar, .statusbar, .transport, button { display: none !important; }
+  .app { display: block; }
   .panel { border: 1px solid #999; box-shadow: none; }
 }
-
-  content: ""; display: inline-block; vertical-align: middle;
-  width: 6px; height: 6px; margin-right: 6px; border-radius: 50%;
-  background: currentColor;
-}
-.nodepos { color: var(--text-mute); }
-
-  background-position: right 16px center, right 11px center;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-  padding-right: 34px;
-}
-input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
-
-  top: calc(100% + 6px);
-  left: 0;
-  z-index: 40;
-  min-width: 210px;
-  padding: var(--s-1);
-  background: var(--surface);
-  border: 1px solid var(--border-2);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow-3);
-}
-.menu.open .dropdown { display: block; }
-.dropdown button {
-  display: block; width: 100%; text-align: left;
-  background: none; border: none; color: var(--text);
-  font-size: 14px; padding: 8px 10px;
-}
-.dropdown button:hover { background: var(--accent-soft); }
-.dropdown hr { border: none; border-top: 1px solid var(--border); margin: var(--s-1) 6px; }

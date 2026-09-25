@@ -179,21 +179,27 @@ ceiling means the DAC cannot be driven into clipping at any volume or EQ setting
 One stylesheet, no build step, no framework, no CDN — a box on a home LAN must look
 right offline, and the self-check enforces that there are no external assets.
 
+- **App shell**: a fixed sidebar (brand, five sections, overflow menu) beside a main
+  column with a top bar, one scrolling pane and the status bar. Only the pane scrolls,
+  so the navigation never leaves the screen.
+- **Navigation** is icon + label with a tinted background and a left accent bar on the
+  active item. The buttons keep `class="tab"` on purpose: `showTab()` in `app.js`
+  rewrites their `className` to exactly `"tab"` / `"tab active"`, so renaming them
+  would silently break the active state.
+- **Three-line hamburger** in the top bar, below 900 px, where the sidebar slides in
+  as an off-canvas drawer over a blurred scrim. `Esc`, the scrim, and picking a section
+  all close it. One flag (`.nav-open` on `.app`) drives the drawer, the X animation and
+  the scrim, so they cannot disagree.
 - **Design tokens** in `:root` (colour, spacing, radii, shadows, motion). Change the
   theme by editing those variables, not the rules.
 - **Dark by default, light via `prefers-color-scheme`.** `color-scheme` is declared in
   the markup so native controls (scrollbars, spinners) match.
-- **Layout**: a full-height flex column — header, tabs, one scrolling pane, status bar.
-  Only the tab pane scrolls, so the controls never leave the screen.
-- **Type hierarchy**, tabular numerals for every time/level readout, and a themed
-  scrollbar.
-- **Controls**: styled range sliders (WebKit and Firefox), custom select chevron drawn
-  in CSS, primary/ghost/danger button variants, 40 px touch targets under 700 px.
+- **Controls**: styled range sliders (WebKit and Firefox), a custom select chevron
+  drawn in CSS, primary/ghost/danger button variants, 40 px touch targets under 700 px.
 - **State is visible**: the selected track gets an accent bar, a streaming node gets a
   green ring and glow, the status bar is a row of pills.
-- **Accessibility**: `:focus-visible` rings for keyboard users only, `aria-label`s on
-  the sliders, a live-region-ish error banner, and full
-  `prefers-reduced-motion` support.
+- **Accessibility**: `:focus-visible` rings for keyboard users only, `aria-label`s and
+  `aria-selected` on the navigation, and full `prefers-reduced-motion` support.
 - **Print stylesheet** so the page prints as a readable list, without app chrome.
 
 The class names are shared with the DOM `app.js` builds at runtime. `selftest.py`

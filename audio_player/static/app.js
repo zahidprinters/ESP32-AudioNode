@@ -357,7 +357,30 @@
     for (var j = 0; j < tabs.length; j++) {
       tabs[j].className = "tab" + (tabs[j].getAttribute("data-tab") === name ?
                                    " active" : "");
+      tabs[j].setAttribute("aria-selected",
+        tabs[j].getAttribute("data-tab") === name ? "true" : "false");
     }
+    var active = document.querySelector(".tab.active");
+    setPageTitle(active ? active.textContent.trim() : name);
+    setSidebar(false);        // picking a section closes the drawer
+  }
+
+  // App shell: the top-bar title follows the selected section.
+  function setPageTitle(text) {
+    var el = $("pageTitle");
+    if (el && text) { el.textContent = text; }
+  }
+
+  // App shell: one flag on .app drives the drawer, the hamburger's X and the
+  // scrim, so they can never disagree. Takes the wanted state - it must not
+  // toggle, because "close the drawer" is also a legitimate call.
+  function setSidebar(open) {
+    var app = document.querySelector(".app");
+    if (!app) { return; }
+    var nav = !!open;
+    app.classList.toggle("nav-open", nav);
+    $("scrim").hidden = !nav;
+    $("menuBtn").setAttribute("aria-expanded", nav ? "true" : "false");
   }
 
   function closeMenus() {
@@ -638,6 +661,20 @@
       showTab(this.getAttribute("data-tab"));
     });
   }
+
+  // app shell: hamburger opens/closes the drawer, the scrim and Escape close it
+  $("menuBtn").addEventListener("click", function () {
+    setSidebar(!document.querySelector(".app").classList.contains("nav-open"));
+  });
+  $("scrim").addEventListener("click", function () { setSidebar(false); });
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape") { setSidebar(false); closeMenus(); }
+  });
+  // Leaving the narrow range must not strand the drawer in its open state.
+  window.addEventListener("resize", function () {
+    if (window.innerWidth > 900) { setSidebar(false); }
+  });
+  setPageTitle("Player");
   var menus = document.querySelectorAll("[data-menu]");
   for (var m = 0; m < menus.length; m++) {
     (function (menu) {

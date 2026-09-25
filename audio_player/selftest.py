@@ -312,8 +312,9 @@ def test_ui_styles():
     for m in re.findall(r'className\s*=\s*"([^"]*?)"\s*\+', js):
         for part in re.findall(r'"([^"]*)"', m):
             used.update(p for p in part.split() if p)
-    # State hooks are set/cleared by app.js rather than declared in a rule.
-    state = {"active", "playing", "sel", "open", "preamp"}
+    # State hooks: set or cleared by app.js at runtime rather than declared in
+    # a rule (the selector exists as a compound, e.g. ".app.nav-open .sidebar").
+    state = {"active", "playing", "sel", "open", "preamp", "nav-open"}
     styled = set(re.findall(r"\.([A-Za-z_][\w-]*)", css))
     missing = sorted(c for c in used - styled if c not in state)
     check("every class in the markup/js has a CSS rule", not missing,

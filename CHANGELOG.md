@@ -7,6 +7,35 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ## [unreleased] — RTP/UDP product phase
 
+### UI: app shell with a sidebar and a hamburger (2026-09-25)
+
+The tabbed page became an application shell. Markup, CSS and browser behaviour only —
+no API, route or element id changed, and the five panes and all 45 ids are intact.
+
+- **Sidebar navigation** replaces the horizontal tab bar. Brand at the top, the five
+  sections as icon + label, and an overflow menu (`File / Nodes / Help` and friends,
+  all previous `data-act` entries) pinned to the bottom. An accent bar and a tinted
+  background mark the active section.
+- **Three-line hamburger** in the top bar. The lines are `<span>`s rather than a glyph,
+  so the shape is identical on every platform, and they rotate into an X when the
+  drawer is open. It appears only below 900 px, where the sidebar becomes an
+  off-canvas drawer with a blurred scrim behind it.
+- **One state flag, three effects.** `setSidebar()` sets `.nav-open` on `.app` and
+  `app.js` derives the drawer position, the hamburger's X and the scrim from it, so
+  they cannot drift out of sync. The scrim and <kbd>Esc</kbd> close the drawer,
+  selecting a section closes it, and resizing above 900 px closes it so it is never
+  stranded open. `setSidebar()` takes the wanted state rather than toggling, because
+  "close the drawer" is itself a legitimate call.
+- **Page title** in the top bar follows the selected section, and `aria-selected` is
+  kept in step with the active nav item.
+- **`style.css` rebuilt from scratch in 18 ordered sections** after overlapping edits
+  left the previous file scrambled. The self-check's brace test is what caught it
+  (160 `{` against 161 `}`), which is exactly the failure that test exists for.
+- Self-check now also allows `nav-open` as a JS-toggled state class.
+
+Verified: selftest all checks pass (57), `node --check app.js` clean, and `/`,
+`/static/style.css`, `/static/app.js` and `/api/status` all return 200.
+
 ### UI rebuilt: design system, dark + light, accessible (2026-09-25)
 
 Markup, CSS and the browser's own behaviour only — **no change to any API, route or
