@@ -1,195 +1,150 @@
-﻿# Guidelines — AudioNode development
+# Development guidelines
 
-## How to use these guidelines
+The engineering rules for AudioNode: how it is built, tested, and changed. Read
+before touching either product. The agent-enforced version of the same rules lives
+in [`.cline/rules/`](../.cline/README.md).
 
-These are the working rules for this project: what exists, what's proven, how to test, how to commit, and why decisions were made. Read before any change. Update after any change.
+## Toolchain (this machine)
 
-## Toolchain
+ESP-IDF **v6.1** at `D:\esp32\v6.1\esp-idf`, tools at `C:\Espressif\tools`. The EIM
+install layout differs from a manual one, so `export.bat` does **not** work — use the
+repository's profile:
 
-**ESP-IDF v6.1** at `D:\esp32\v6.1\esp-idf`, tools at `C:\Espressif\tools` (EIM install — `export.bat` does NOT work).
-
-Single canonical environment: `D:\esp-idf\tools\env.ps1` (PowerShell).
 ```powershell
-. D:\esp-idf\tools\env.ps1
-cd d:\esp-idf\firmware
+. tools\env.ps1
+cd firmware
 idf.py set-target esp32s3
 idf.py build
 idf.py -p COM5 flash
 idf.py -p COM5 monitor --no-reset
 ```
 
-COM5 = board (USB Serial Device). **Never COM3** — that's the Intel AMT motherboard port.
+**COM5 is the board** (USB Serial Device). Never use COM3 — that is the Intel AMT
+motherboard port. The server side needs nothing but Python 3.11 and
+`requirements.txt`; it does not need the ESP-IDF environment.
 
-**Board quirks (never re-litigate)**:
-- USB CDC console can die after flashing → unplug/replug USB fixes it.
-- If board shows "waiting for download" → unplug/replug USB (no buttons).
-- Download-mode recovery (no unplug needed): with COM5 free, run `python -m esptool --chip esp32s3 -p COM5 run` then `idf.py -p COM5 monitor --no-reset`. The harness runs esptool FIRST, then monitor (never concurrently — port conflict).
+### Board quirks (documented because each one cost hours)
 
-## Protocol (production)
+| Symptom | Fix |
+|---|---|
+| `idf.py flash` cannot connect | Hold **BOOT**, tap **RESET**, release BOOT, retry |
+| Log shows `waiting for download` | Unplug/replug USB — no buttons needed |
+| USB CDC console dies after flashing | Unplug/replug USB |
+| Monitor will not attach | `python -m esptool --chip esp32s3 -p COM5 run`, then attach the monitor |
+| Monitor attach resets the board anyway | Retry the attach until the boot section appears; cumulative counters restart from 0 |
+| A fix appears not to work | Stale senders/monitors are still feeding the board. `taskkill /F /IM python.exe /T` before every test |
 
-**RTP L16 over UDP** — 48 kHz, 16-bit, mono, 20 ms frames.
+## Protocol rules
 
-- Frame: 960 samples = 1 920 PCM bytes.
-- RTP: version=2, PT=96, seq +1/frame, ts +960/frame (samples, not ms), SSRC = random per sender.
-- UDP destination: board IP :1234. Source IP must equal the configured server IP.
-- Receiver validates every datagram (version, PT, length, source IP, seq/ts sanity) before feeding PCM to the ring buffer. Invalid = discard + silence fill.
-- Missing packets: fill silence, never block I2S waiting for a lost UDP packet.
+RTP L16 over UDP, 48 kHz / 16-bit / mono / 20 ms frames = 960 samples = 1920 bytes.
 
-See ARCHITECTURE.md for the full spec.
+- RTP: version 2, PT 96, `seq` +1 per frame, `ts` +960 per frame (samples, not ms),
+  SSRC random per sender.
+- Destination: board IP :1234, or the port stored by the setup portal. The datagram's
+  source IP must equal the board's configured server IP — a whitelist, not a hint.
+- The receiver validates every datagram (length, version, PT, payload size, source IP,
+  seq/ts continuity) before any PCM reaches the ring buffer. Invalid = discard and
+  silence-fill.
+- A missing packet is filled with silence. The audio task must never wait for it.
 
-## Audio pipeline (preserved from TCP prototype)
+`sdkconfig.defaults` is load-bearing: frames are 1932 bytes, over the 1500-byte MTU, so
+they arrive IP-fragmented. `CONFIG_LWIP_IP4_REASSEMBLY` and
+`CONFIG_LWIP_IP_REASS_MAX_PBUFS=20` are not optional — without reassembly lwIP drops
+them silently and the board never sees the frame.
 
-- I2S: 48 kHz, 16-bit, mono, Philips-standard, no MCLK.
-- MAX98357A: BCLK=GPIO4, LRC=GPIO5, DIN=GPIO6, SD=GPIO15 (HIGH=amp on). No MCLK.
-- PSRAM octal ring buffer (jitter cushion, 65 KB tested).
-- Pump: DMA-backpressure driven, no fixed sleep.
-- Gain: ×2 digital (+6 dB) on the board. Sender decodes with headroom.
-- LED: WS2812 on GPIO48 — red (WiFi down) / blue breathing (waiting) / VU (streaming).
-- Boot: 2-second tone then silence.
+## Audio pipeline rules
+
+- I2S 48 kHz, 16-bit, Philips standard, no MCLK; BCLK 4 / LRC 5 / DIN 6 / SD 15.
+- Jitter ring in octal PSRAM; the pump is DMA-backpressure driven. Never a fixed
+  `vTaskDelay` in the pump — it produced periodic audible glitches.
+- ×2 digital gain on the board (+6 dB) with the sender's limiter at a 0.5 ceiling, so
+  no volume or EQ combination can saturate the DAC.
+- RX and audio are separate tasks. The audio task never touches the network. Wi-Fi
+  reconnects, LED updates, HTTP handlers and logging are throttled so they cannot
+  starve the pump — USB CDC `printf` floods are a real cause of dropouts.
+- The ring is flushed when a stream ends so silence starts promptly.
 
 ## Build / flash / test loop
 
-1. Build (`idf.py build`) — must succeed before flashing. Never flash a stale build.
-2. Flash (`idf.py -p COM5 flash`).
-3. Monitor (`idf.py -p COM5 monitor --no-reset`) — observe on hardware.
-4. Start the server — either the CLI sender (`audio_player/send_pcm.py`) or the GUI app (`python -m audio_player.app`).
-5. Observe + listen. Log the session to `logs/<date>_<milestone>.md`.
-6. Verify by ear + PC microphone when needed (proven method: tone/noise ratio ~99x on the boot tone).
-7. Works → mark ✅ in PROJECT_STATE.md §3, update §8 next steps → **commit** (`M<x>: <what works> (verified on hardware)` for firmware; `M<x>: <what works> (verified)` for app/server changes that don't touch firmware).
-8. Fails → do NOT commit. Record exact error + approach in PROJECT_STATE §4/§5. Try a DIFFERENT approach (never repeat a failed one).
+1. `idf.py build` must succeed before flashing. Never flash a stale build.
+2. Flash, then monitor with `--no-reset`.
+3. Stream something — `python -m audio_player.app`, or
+   `python audio_player\send_pcm.py tone <board-ip> 1234 30 1000 0.5`.
+4. Listen. When something is subtle, record the speaker with the PC microphone and
+   measure the tone against the noise floor (the boot tone measured ~99x).
+5. Server-side changes: `python -m compileall -q audio_player`,
+   `python -m audio_player.selftest`, `python -m pip check`.
 
-**Kill zombie processes between tests**: `taskkill /F /IM python.exe /T` and kill any monitor wrappers. Verify 0 python processes before each test. Stale senders poison tests — they keep feeding the board unfiltered audio, making fixes appear not to work.
-
-## What does NOT block the audio task
-
-- The I2S/pump task must never wait on network.
-- RX task (UDP recv) and audio task are separate. RX fills the ring; audio pulls from the ring.
-- WiFi reconnection, LED updates, network retries — all in their own tasks or throttled so they don't starve the pump.
-- Board-side logging: throttled so USB CDC printf doesn't flood and starve the pump.
+Milestones are proved in order — serial tone → Wi-Fi → RTP receiver → streaming. Each
+one before the next.
 
 ## Commit policy
 
-- Commit **only verified working states** (compiled + flashed + observed OK on hardware for firmware; started + exercised + verified for the app).
-- Message format: `M<x>: <one-line what works> (verified on hardware)`.
-- If a fix fails → revert or try a different approach → update PROJECT_STATE §4/§5. Don't commit broken states.
+- Commit only states that were actually verified: firmware must have been flashed and
+  observed; the app must have been started and exercised.
+- Firmware: `M<x>: <what works> (verified on hardware)`. App:
+  `M<x>: <what works> (verified)`.
+- A failed attempt is documented in [PROJECT_STATE](PROJECT_STATE.md) §4/§5, then a
+  *different* approach is tried. Never commit a broken state to tidy the log.
 
 ## File hygiene
 
-- One canonical file per purpose. `send_pcm.py` stays `send_pcm.py`; `main.c` stays `firmware/main/main.c`; the app stays in `audio_player/`.
-- Experiments/scratch → `tmp/` (git-ignored, periodically deleted). Never in the code tree.
-- Logs → `logs/`. Old/abandoned files get deleted, not renamed.
-- Before creating any file: check PROJECT_STATE §2 + existing tree; extend existing files instead of adding new ones.
+- One canonical file per purpose. `send_pcm.py` stays `send_pcm.py`; the application
+  stays in `firmware/main/main.c`; the server stays in `audio_player/`.
+- Experiments go in `tmp/` — git-ignored and disposable. Nothing experimental stays in
+  the source tree.
+- Session logs go in `logs/`, one file per session. They are local scratch and are
+  never committed; conclusions go to `CHANGELOG.md` and `PROJECT_STATE.md`.
+- Abandoned files are deleted, not renamed or parked. Before creating a file, check the
+  feature map and extend what exists.
 
-## Anti-patterns (never do)
+## Anti-patterns
 
-- Re-trying a known-failed approach (check PROJECT_STATE §4 first).
-- Re-writing code that already exists (check feature map first).
-- Batching many changes before one build.
-- "It compiles" = "it works" — hardware observation required.
-- Blitcopy network bytes to I2S without explicit conversion (except where the wire format is already the target's native endian; this project's RTP L16 payload is LE and ESP32-S3 is LE, so no swap needed).
+- Re-trying an approach that already failed.
+- Adding a parallel implementation of something that exists.
+- Batching several changes into one untested build.
+- Treating "it compiles" as "it works".
 - Blocking the audio task on a missing UDP packet.
-- Erasing NVS on WiFi failure (only the 5-second BOOT hold erases config).
+- Erasing NVS on Wi-Fi failure — only the 5-second BOOT hold erases configuration.
+- Blitting network bytes into I2S without thinking about endianness. It is safe *here*
+  only because RTP L16 is little-endian and the ESP32-S3 is little-endian; the receiver
+  is the one place to change if that ever stops being true.
 
-## Archive — TCP prototype
+## Known ceilings (deliberate, documented)
 
-The TCP implementation (raw PCM over TCP, M0–M3) is archived, not deleted:
-- Git history retains all TCP commits (M0 through M4).
-- PROJECT_STATE.md §3 records verified TCP milestones.
-- The audio pipeline is preserved and reused in the RTP build.
-- The transport layer is replaced (TCP → UDP + RTP + validation).
-
-The TCP path proved the audio hardware works end to end. The RTP path is the product transport.
-
-**Known ceilings (documented in code + here)**:
-- MP3 seek is ffmpeg-dependent, not sample-accurate to the sample — fine for a seek bar, not for frame-locked editing.
-- Volume change restarts the ffmpeg pipeline (ffmpeg volume is an input filter) — a brief gap on volume drag; acceptable for V1.
-- WS server uses eventlet (deprecated). Fine for an internal V1 tool; migration to gevent/asyncio is a noted future cleanup, not a blocker.
-- Frame-accurate multi-node sync is explicitly out of V1 — when we get there it's a known hard problem (clock drift across ESP32s), flagged in ARCHITECTURE.md.
-- The app is Windows-first today. Linux/macOS run the same `python -m audio_player.app` as long as ffmpeg (imageio-ffmpeg) is installed; the only Windows-only piece is `audio_player/send_pcm.py` loop mode, not the app.
-
-The TCP path proved the audio hardware works end to end. The RTP path is the product transport.
+| Ceiling | Why it is acceptable | Upgrade path |
+|---|---|---|
+| Multi-board is not sample-synchronised | Each board keeps its own clock | Shared RTP timestamp plus a per-node offset phase |
+| Volume and EQ changes restart the ffmpeg pipeline | ffmpeg volume is an input filter | Decode once, scale in-process |
+| MP3 seek is not sample-accurate | Fine for a seek bar | Maintain a per-file sample index |
+| Library scan decodes each file to read its duration | imageio-ffmpeg ships no ffprobe | Cache durations on disk |
+| Discovery is a ping sweep plus an ARP read | Bounded to the local /24, ~10 s | Have the board announce itself |
+| The app runs the Werkzeug dev server | Trusted LAN only; unauthenticated and unhardened | Real WSGI server plus auth before exposing it |
+| The board pinout is compiled in | Prevents a portal mistake from bricking I2S or boot | Per-pinout build variants |
 
 ## Repository layout
 
 ```
-
-esp32-audio-node/
-├── firmware/                 # ESP32 firmware (ESP-IDF v6.1, target esp32s3)
-│   ├── main/main.c           # app_main + WiFi/RTP/UDP receiver + setup AP + factory reset
-│   ├── main/CMakeLists.txt
-│   ├── main/idf_component.yml
-│   ├── CMakeLists.txt
-│   ├── sdkconfig.defaults     # PSRAM octal, IP reassembly (frames > MTU), IP_REASS_MAX_PBUFS=20
-│   ├── sdkconfig             # generated — do not edit by hand
-│   ├── managed_components/
-│   └── dependencies.lock
-│
-├── audio_player/             # server-side GUI app (this machine = server during dev)
-│   ├── app.py                # Flask + Socket.IO backend (`python -m audio_player.app`)
-│   ├── player.py             # the single ffmpeg -> RTP L16/UDP pipeline (+ pacing)
-│   ├── library.py            # media folder scan + ffprobe durations
-│   ├── config.py             # paths, nodes, RTP constants
-│   ├── selftest.py           # `python -m audio_player.selftest` — 29 asserts, no framework
-│   ├── send_pcm.py           # standalone CLI sender (file / loop / tone)
-│   ├── static/               # app.js, style.css
-│   ├── templates/            # index.html
-│   └── media/                # MP3 files (copied in for dev; UI can point elsewhere)
-│
-├── docs/                   # all project documentation
-│   ├── HARDWARE.md         # hardware, overview, development history
-│   ├── ARCHITECTURE.md
-│   ├── SETUP.md
-│   ├── GUIDELINES.md      # this file
-│   ├── CHANGELOG.md       # repo-level change log
-│   └── PROJECT_STATE.md
-│
-├── README.md             # project overview, quick start, node setup, checks
-├── pyproject.toml        # packaging metadata (`pip install -e .`)
-├── requirements.txt      # minimum dependency versions (not a lockfile)
-├── tools/env.ps1        # ESP-IDF v6.1 environment (PowerShell) — only needed for firmware builds
-├── .gitignore
-├── logs/                 # session logs
-└── tmp/                  # scratch (git-ignored)
-
+firmware/                 ESP-IDF project (target esp32s3)
+  main/main.c             the entire board application
+  main/idf_component.yml  led_strip dependency
+  sdkconfig.defaults      PSRAM + IP reassembly (both required, see above)
+  sdkconfig               generated — do not edit by hand
+audio_player/             the PC server
+  app.py                  Flask + Socket.IO: REST, WebSocket, scheduler
+  player.py               the single ffmpeg -> RTP L16/UDP pipeline
+  library.py              folder scan + durations
+  config.py               all tunables + user-state persistence
+  selftest.py             the runnable check (`python -m audio_player.selftest`)
+  send_pcm.py             CLI sender: tone / file / loopback
+  install_startup.ps1     register a logon/startup task (Windows)
+  uninstall_startup.ps1   remove it
+  start_audioplayer.bat   launcher
+docs/                     ARCHITECTURE, SETUP, GUIDELINES, PROJECT_STATE
+tools/env.ps1             ESP-IDF environment for this machine
+logs/                     git-ignored session scratch
+tmp/                      git-ignored experiments
 ```
 
-Two independent products live in this repo, kept strictly separate:
-
-- **firmware/** — the ESP32 speaker-box firmware. Built with `idf.py build` from `firmware/`. Flashed to the board. Talks RTP L16/UDP only; has no MP3 decoding, no playlist logic, no persistence of playback state.
-- **audio_player/** — the server-side GUI app that runs on the server machine. Decodes MP3 → RTP L16/UDP, serves the browser UI, tracks position/volume. Talks to the boards over UDP only (same wire format the CLI sender uses).
-
-They connect only over the network (UDP datagrams to board IP :1234). Do not mix their code — firmware code stays in firmware/, app code stays in audio_player/.
-
-### Audio Player App (audio_player/)
-
-A browser-based control panel that runs on the server machine and streams audio to one or more ESP32 AudioNode boards over RTP L16/UDP.
-
-**What it is**: the "complete audio system" server — library (MP3 folder), play/stop/volume/seek, per-node status, scheduling (V2+), multi-node (V2+).
-
-**Stack (V1)**: Flask + Flask-SocketIO (eventlet) + ffmpeg (via imageio-ffmpeg static binary, no system install) + a browser on the same machine (or any machine that can reach the server's port 5000).
-
-**Run (V1)**:
-```powershell
-python -m audio_player.app            # from d:/esp-idf (or any cwd with audio_player on path)
-# UI:  http://localhost:5000
-```
-With a different library root or extra nodes:
-```powershell
-python -m audio_player.app --library "D:\Music" --node <board-ip>:1234
-```
-
-**Config**: `audio_player/config.py` holds defaults (library_root, nodes, default_volume, RTP params, ffmpeg path). The UI can change library_root at runtime (WS `set_library_root`); nodes for V1 are fixed in config (multi-node editing is V2+).
-
-**Wire format**: exactly the same RTP L16/UDP the firmware expects and the CLI sender (`audio_player/send_pcm.py`) uses — 48 kHz, 16-bit, mono, 20 ms frames, PT=96, seq+1/frame, ts+960/frame, UDP to each node IP :1234. The app reuses the proven ffmpeg→RTP path from `send_pcm.py` file_mode.
-
-**V1 scope (this milestone)**:
-- MP3 library (folder scan + duration via ffprobe).
-- Play / stop / volume slider / position seek bar (seek = ffmpeg restart at the target sample).
-- One node (<board-ip>:1234) — the board we have on the desk.
-- Node status shown in the UI = server-side view (is the stream running?). The board has no back-channel today, so "playing" = "we are sending". V2+ adds board-reported confirmation when the firmware gains a back-channel.
-
-**V2+ (not in V1)**:
-- Multi-node: add/edit nodes in the UI, stream to N boards.
-- Scheduler: daily time window (e.g. 07:00–10:00) → auto-play a playlist; pause outside the window.
-- Resume-from-last-position: persist each stream's sample position; on restart seek ffmpeg back to it.
-- Board-reported "am I actually playing audio" confirmation (firmware back-channel — future firmware change).
+The two products share nothing but the wire format. Firmware code stays in
+`firmware/`, app code stays in `audio_player/`.

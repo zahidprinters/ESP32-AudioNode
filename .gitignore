@@ -9,11 +9,11 @@ firmware/managed_components/
 __pycache__/
 *.pyc
 
-# --- raw dumps --------------------------------------------------------------
-# Curated per-session evidence lives in logs/*.md; raw monitor/build dumps do not.
-logs/*.log
-logs/*.txt
-logs/*.err
+# --- session logs (local scratch, never committed) -------------------------
+# Curated conclusions live in CHANGELOG.md and docs/PROJECT_STATE.md.
+# Raw transcripts carry private LAN addresses and the lab SSID.
+logs/*
+!logs/README.md
 
 # --- media ------------------------------------------------------------------
 # Audio content is local: audio_player/config.py recreates the folder on import.

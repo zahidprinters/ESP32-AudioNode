@@ -12,6 +12,7 @@
 # Known ceiling: the position loop pushes every 250 ms, so the seek bar and the
 # per-node position readout are coarse. Fine for V1 (one node).
 
+import datetime
 import os
 import re
 import time
@@ -271,7 +272,6 @@ def create_app():
 
     def _plans_from_body(data):
         """Validate a plan from request body; returns (plan, error_str)."""
-        import re as _re
         name = str((data or {}).get("name", "")).strip()
         action = str((data or {}).get("action", "")).strip().lower()
         file_ = str((data or {}).get("file", "")).strip()
@@ -282,7 +282,7 @@ def create_app():
             return None, "action must be 'play' or 'stop'"
         if not file_:
             return None, "file required"
-        if not _re.fullmatch(r"\d{1,2}:\d{2}", time_):
+        if not re.fullmatch(r"\d{1,2}:\d{2}", time_):
             return None, "time must be HH:MM (24h), e.g. 07:30"
         hh, mm = time_.split(":")
         if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
@@ -486,7 +486,6 @@ def create_app():
     # Background scheduler: check every second and fire scheduled play/stop at
     # the right wall-clock time. Plans persist across restarts.
     def background_schedule_loop():
-        import datetime
         while True:
             time.sleep(1)
             now = datetime.datetime.now()

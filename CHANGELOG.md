@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 All notable changes to the **ESP32 AudioNode** project are documented here.
 Format: latest first. Each entry maps to a git commit. See each doc file (README, ARCHITECTURE, etc.) for current state.
@@ -6,6 +6,51 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 ---
 
 ## [unreleased] — RTP/UDP product phase
+
+### Production cleanup pass (2026-09-25)
+
+Documentation and dead-weight removal only; no behaviour change.
+
+- **Deleted 13 files.** `TESTING.md` (empty), `docs/CHANGELOG.md` (BOM-only stub — the
+  root changelog is canonical), `docs/AUDIT.md` (the 32-item firmware review register,
+  closed with 0 open items; its surviving findings moved to `docs/PROJECT_STATE.md` §4),
+  `docs/HARDWARE.md` (~70 % duplicate of the root README), `tools/README.md`
+  (duplicated the guidelines and linked a `CONTRIBUTING.md` that never existed),
+  `firmware/release/README.md` (placeholder for a BIN that was never shipped), and the
+  seven `logs/2026-09-*.md` session transcripts.
+- **`logs/` is now actually git-ignored.** `logs/README.md` always claimed the folder
+  was untracked, but `.gitignore` excluded only `*.log`/`*.txt`/`*.err` — so every
+  `*.md` transcript had been committed. It now ignores the folder and keeps the README.
+- **Repaired every dangling reference**: `docs/WINDOWS_INSTALLER.md` (linked twice,
+  never existed), `CONTRIBUTING.md`, `release/README.md`, and
+  `logs/2026-09-15_tone-diagnosis.md` (referenced from four places, never committed).
+  Plans that do not exist yet now live in `docs/PROJECT_STATE.md` §8 instead of as stub
+  documents.
+- **Rewrote `docs/PROJECT_STATE.md`** into the numbered structure the workflow rules
+  reference (§1–§8) and repaired literal corruption in it (`\firmware/`,
+  `with \n umpy`). Errors, rejected approaches and decisions are now recorded where the
+  rules say to look for them.
+- **Split the agent rules.** `.cline/rules/workflow.md` is process only and
+  `.cline/rules/esp32-audio-node.md` is project facts only — they duplicated each other
+  and both pointed at a `PROJECT_STATE.md` that lives in `docs/`. Added
+  `.cline/README.md` documenting the folder and stating which file owns what.
+- **Rewrote `docs/GUIDELINES.md`**: dropped a duplicated paragraph, a stale V1/V2
+  roadmap and the "29 asserts" figure; added the board-quirk table, the load-bearing
+  `sdkconfig` settings, anti-patterns, and known ceilings with their upgrade paths.
+- **Python version corrected** across the docs to 3.11+, matching `pyproject.toml`
+  (was "3.8+" in two places).
+- **Dead code removed**: `cfg.pcm_buffer_bytes` (never read), the `import re as _re`
+  shadow inside `_plans_from_body`, two write-only `sent` counters in `send_pcm.py`, and
+  the `/install` + `/uninstall` switches in `start_audioplayer.bat` — which duplicated
+  `install_startup.ps1` under a *different* scheduled-task name (`AudioPlayerServer` vs
+  `AudioPlayer`) with weaker restart settings.
+- **Honest docs**: `audio_player/README.md` now lists all 22 routes (pause, resume,
+  settings and schedule were missing) and states plainly that the server is
+  unauthenticated, binds `0.0.0.0` and runs a development WSGI server.
+- **Normalised** every edited file to LF + UTF-8 without BOM, per `.gitattributes`.
+- **Verified**: `python -m compileall -q audio_player`, `python -m audio_player.selftest`
+  (all checks pass), `python -m pip check`, and `idf.py build`. No firmware or app
+  behaviour was changed, so no re-flash was required.
 
 ### Config portal, port + node name (2026-09-21)
 - **Setup portal extended**: added `node_name` (optional label) and `server_port`

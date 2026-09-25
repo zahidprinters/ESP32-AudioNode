@@ -1,4 +1,4 @@
-﻿# Architecture — AudioNode WiFi speaker box
+# Architecture — AudioNode WiFi speaker box
 
 ## Product concept
 
@@ -146,7 +146,7 @@ The receiver writes the validated RTP PCM payload straight into the ring buffer 
 ### Setup AP mode (first boot, factory reset, or after WiFi failure)
 
 - SoftAP: SSID `AudioNode-Setup`, open (no AP password).
-- The board runs an HTTP server on the AP subnet (e.g. 192.168.4.1) serving the setup page.
+- The board runs an HTTP server on the AP subnet (192.168.4.1) serving the setup page.
 - The page is reachable by navigating to the board's AP IP in a browser; on most phones connecting to the open AP triggers an automatic portal prompt.
 - In this mode the UDP listener is already bound (`0.0.0.0:1234`) but nothing streams; the board waits for the user to submit the config form.
 
@@ -193,10 +193,7 @@ The sender sends the same RTP stream to each board IP:port. Each board validates
 
 ## Archive note — TCP prototype
 
-The TCP implementation (raw PCM over TCP, M0–M3) is archived, not deleted:
-- Git history retains all TCP commits.
-- PROJECT_STATE.md records the verified TCP milestones.
-- The audio pipeline is preserved and reused in the RTP build.
-- The transport layer is replaced (TCP → UDP + RTP).
-
-The TCP path proved the audio hardware works end to end. The RTP path is the product transport.
+The first transport was raw PCM over TCP (milestones M0–M3). It is in neither this
+tree nor the current docs: the full history is in git, and the audio pipeline it
+proved (I2S, PSRAM ring, DMA-backpressure pump, ×2 gain, RGB LED) is the one still
+running. Only the transport changed — TCP → UDP + RTP.

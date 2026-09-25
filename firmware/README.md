@@ -1,4 +1,4 @@
-﻿# firmware — ESP32-S3 AudioNode
+# firmware — ESP32-S3 AudioNode
 
 ESP-IDF firmware for the speaker node. It joins Wi-Fi, runs a UDP listener on
 port 1234, validates incoming RTP L16 datagrams, buffers them in PSRAM and pumps
@@ -83,11 +83,9 @@ exposed through the setup portal:
 
 GPIO 0 is a strap pin tied to the BOOT button (factory reset), and I2S signals
 must land on valid I2S-capable GPIOs — a wrong assignment can silently brick
-audio or the boot sequence. The shipped/pre-built BIN
-([`release/README.md`](release/README.md)) therefore commits to this exact
-pinout. Building from source for a different board/pinout is an advanced path
-for later; change the `#define`s at the top of `main.c` only if you accept that
-scope.
+audio or the boot sequence. This firmware therefore targets exactly one board and
+one pinout. Building for a different board means changing the `#define`s at the top
+of `main.c` and accepting that nobody has verified the result on hardware.
 
 Wi-Fi drops do not erase NVS — the board reconnects automatically and the LED
 turns red meanwhile.
@@ -133,9 +131,8 @@ Behavioural verification is done on hardware (tone test, then a stream from
 
 ## Component history
 
-See the root [`CHANGELOG.md`](../CHANGELOG.md) — one canonical changelog for the
-whole project — and [`docs/HARDWARE.md`](../docs/HARDWARE.md) for the
-hardware/development history.
+The root [`CHANGELOG.md`](../CHANGELOG.md) is the one canonical changelog for the
+whole project. Current state and known limits: [`docs/PROJECT_STATE.md`](../docs/PROJECT_STATE.md).
 
 ## License
 

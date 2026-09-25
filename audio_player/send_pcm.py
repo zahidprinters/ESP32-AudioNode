@@ -45,13 +45,13 @@ def file_mode(path, ip, port, vol):
                   f"alimiter=limit=0.75,volume={vol}",
            "-ar", str(SR), "-ac", "1", "-f", "s16le", "-loglevel", "error", "-"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    seq = 0; ts = 0; sent = 0; t0 = None
+    seq = 0; ts = 0; t0 = None
     try:
         while True:
             pcm = proc.stdout.read(FRAME_BYTES)
             if not pcm or len(pcm) < FRAME_BYTES: break
             sock.sendto(make_rtp_header(seq, ts) + pcm, (ip, port))
-            seq += 1; ts += FRAME_SAMPLES; sent += len(pcm)
+            seq += 1; ts += FRAME_SAMPLES
             if t0 is None: t0 = time.time()
             else:
                 target = ts / SR; lag = target - (time.time() - t0)
@@ -71,7 +71,7 @@ def loop_mode(ip, port, vol):
     ch = int(dev["maxInputChannels"]); rate = int(dev["defaultSampleRate"])
     print(f"loopback: {dev['name']} ({ch}ch @ {rate}Hz)", flush=True)
     frames = FRAME_SAMPLES if rate == SR else int(round(FRAME_SAMPLES * rate / SR))
-    seq = 0; ts = 0; sent = 0
+    seq = 0; ts = 0
     stream = pa.open(format=pyaudio.paInt16, channels=ch, rate=rate,
                      input=True, input_device_index=dev["index"], frames_per_buffer=frames)
     try:
@@ -85,7 +85,7 @@ def loop_mode(ip, port, vol):
             elif len(x) < FRAME_SAMPLES: x = np.pad(x, (0, FRAME_SAMPLES - len(x)))
             pcm = (np.clip(x * vol, -32767, 32767)).astype("<i2").tobytes()
             sock.sendto(make_rtp_header(seq, ts) + pcm, (ip, port))
-            seq += 1; ts += FRAME_SAMPLES; sent += len(pcm)
+            seq += 1; ts += FRAME_SAMPLES
             if seq % 50 == 0: print(f"  sent {seq} frames ({seq * FRAME_SAMPLES / SR:.1f}s)", flush=True)
     except KeyboardInterrupt: print(f"\ninterrupted after {seq}")
     finally:

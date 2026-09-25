@@ -1,20 +1,18 @@
 @echo off
 REM ============================================================
-REM  AudioPlayer - start the audio server app
-REM  Usage:  start_audioplayer.bat            (normal window)
-REM          start_audioplayer.bat /min       (minimized)
+REM  AudioPlayer - start the audio server
+REM  Usage:  start_audioplayer.bat          (normal window)
+REM          start_audioplayer.bat /min     (minimized)
 REM
-REM  Install to start automatically at Windows login (power-cycle
-REM  safe):  run install_startup.bat once, or run this file with
-REM  the /install switch:  start_audioplayer.bat /install
+REM  To start it automatically at logon or at boot, use the scheduled
+REM  task instead - it is the single supported mechanism:
+REM      powershell -ExecutionPolicy Bypass -File install_startup.ps1
+REM      powershell -ExecutionPolicy Bypass -File install_startup.ps1 -AtStartup
+REM      powershell -ExecutionPolicy Bypass -File uninstall_startup.ps1
 REM ============================================================
 setlocal
 cd /d "%~dp0"
 
-if /i "%~1"=="/install" goto :install
-if /i "%~1"=="/uninstall" goto :uninstall
-
-REM ---- run the server -------------------------------------------------------
 REM Find python on PATH; fall back to the py launcher.
 where python >nul 2>nul
 if %errorlevel%==0 (
@@ -31,22 +29,3 @@ if %errorlevel%==0 (
   )
 )
 goto :eof
-
-:install
-REM ---- register a logon task so the app auto-starts after a power cycle -----
-schtasks /Create /F /SC ONLOGON /TN "AudioPlayerServer" ^
-  /TR "\"%~f0\" /min" ^
-  /RL LIMITED
-if %errorlevel%==0 (
-  echo Installed: AudioPlayerServer will start at every logon.
-  echo Task runs minimized; audio streaming starts per your Schedule plans.
-) else (
-  echo Failed to create scheduled task. Try running as Administrator.
-)
-pause
-goto :eof
-
-:uninstall
-schtasks /Delete /F /TN "AudioPlayerServer" >nul 2>nul
-echo Removed the AudioPlayerServer logon task (if it existed).
-pause

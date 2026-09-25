@@ -1,4 +1,4 @@
-﻿/*
+/*
  * audio_node — WiFi audio streamer (M4)
  * Board: ESP32-S3-DevKitC-1-N8R2, Amp: MAX98357A
  * 48000 Hz, 16-bit, MONO, I2S Philips std, no MCLK.
@@ -137,7 +137,7 @@ static inline int16_t gain_clip(int32_t s)
    because it was stored-but-ignored; this time it's actually consumed) and
    node_name. Existing v2 blobs are rejected by the version/size check in
    cfg_load -> one re-provision through the setup AP (NVS kept on failure).
-   See docs/AUDIT.md Phase C/P16 decision (a). */
+   See docs/PROJECT_STATE.md (decision D-3). */
 #define CFG_VERSION 3
 typedef struct {
     uint8_t version;      /* must equal CFG_VERSION */

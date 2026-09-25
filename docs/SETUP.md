@@ -1,4 +1,4 @@
-﻿# Server setup — AudioNode
+# Server setup — AudioNode
 
 How to run the audio server that sends PCM audio to one or more AudioNode boards over RTP/UDP.
 
@@ -37,20 +37,20 @@ box at your music folder, press Scan, pick a file, press Play.
 Defaults (node IP/port, library root, volume) live in `audio_player/config.py`.
 
 Run the built-in check any time with `python -m audio_player.selftest` — it validates the
-RTP wire format, the frame math, the real send rate, position-across-restart, and the
-UI's element-ID contract (29 asserts, no test framework).
+RTP wire format, the frame math, the real send rate, position-across-restart, the
+EQ chain invariants and the UI's element-ID contract.
 
 ## Prerequisites
 
-- Python 3.8+
+- Python 3.11+ (the tested version; `pyproject.toml` requires it)
 - ffmpeg (for file mode) — the `imageio-ffmpeg` pip package gives you a static ffmpeg binary with no system install
 - numpy (for tone mode + some processing)
 - On Windows only: `pyaudiowpatch` (PyAudio fork with WASAPI loopback) for capturing PC speaker output
 
 ## Install (all platforms)
 
-```bash
-pip install numpy imageio-ffmpeg
+```powershell
+python -m pip install -r requirements.txt      # or: pip install -e .
 ```
 
 ## Install (Windows only — for loopback / VLC-mirrored mode)
@@ -164,8 +164,8 @@ the board can never clip no matter what the EQ does.
   chain (65 Hz highpass, −3 dB bass shelf @ 120 Hz, compressor, limiter).
 - **Preset** dropdown: Flat, Acoustic, Bass Booster, Bass Reducer, Classical, Pop,
   Rock / Metal, Vocal / Voice, Treble Boost, Mid Cut (speaker) — the last one
-  encodes this speaker's measured distortion zone (250 Hz–1 kHz,
-  `logs/2026-09-15_tone-diagnosis.md`).
+  encodes this speaker's measured distortion zone (250 Hz–1 kHz; the measurement
+  it encodes is recorded in `audio_player/config.py`).
 - **Save…** stores the current curve under a name of your choice, persisted in
   `audio_player/eq_presets.json` (git-ignored per-user state).
 

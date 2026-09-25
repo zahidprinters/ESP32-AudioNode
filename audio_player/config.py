@@ -49,9 +49,9 @@ EQ_MIN_DB, EQ_MAX_DB = -12.0, 12.0
 
 # Built-in presets (name -> 10 band gains, dB on VLC's grid: 60/170/310/600 Hz,
 # 1/3/6/12/14/16 kHz). Common media-player set (VLC/Winamp-style) plus two
-# hardware-specific ones: "Mid Cut (speaker)" encodes the 2026-09-15 tone
-# ladder finding (250 Hz-1 kHz distorts first on this driver,
-# logs/2026-09-15_tone-diagnosis.md). Built-ins cannot be overwritten.
+# hardware-specific ones: "Mid Cut (speaker)" encodes the measured speaker
+# response (250 Hz-1 kHz distorts first on this driver). Built-ins cannot be
+# overwritten.
 EQ_BUILTIN_PRESETS = {
     "Flat":              [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     "Acoustic":          [4, 3, 2, 0, -2, -1, 1, 2, 3, 4],
@@ -84,10 +84,10 @@ class Config:
         self.library_root = str(Path(__file__).resolve().parent / "media")
         os.makedirs(self.library_root, exist_ok=True)
         self.default_volume = 1.0
-        # Speaker calibration from the 2026-09-15 tone ladder
-        # (logs/2026-09-15_tone-diagnosis.md): bass tones CLEAN, mids (250-1k)
-        # distort first, song sub-bass peak at 41 Hz is unreproducible, and the
-        # board's x2 digital gain saturates above 0.5 FS sender level.
+        # Measured speaker calibration (tone ladder, 2026-09-15): bass tones
+        # CLEAN, mids (250-1k) distort first, song sub-bass peak at 41 Hz is
+        # unreproducible, and the board's x2 digital gain saturates above
+        # 0.5 FS sender level.
         self.sub_hp_hz = 65.0        # highpass: cut what the driver can't reproduce
         self.bass_cut_hz = 120.0     # gentle shelf (-6@150 over-corrected)
         self.bass_cut_db = -3.0
@@ -104,7 +104,7 @@ class Config:
         self.eq_user_presets = {}
         self.eq_presets_path = str(Path(__file__).resolve().parent /
                                    "eq_presets.json")
-                # Node list persistence (discovered/added nodes survive restarts).
+        # Node list persistence (discovered/added nodes survive restarts).
         self.nodes_path = str(Path(__file__).resolve().parent / "nodes.json")
         # Settings: max volume ceiling, default EQ preset, default library root.
         # Persisted to settings.json (gitignored user state).
@@ -116,8 +116,6 @@ class Config:
         # "action": "play"|"stop", "file": "filepath (relative to library_root)"}.
         # Persisted inside settings.json; survives restarts.
         self.scheduled_plans = []
-        # Player: headroom for the pump's internal buffer (a few frames).
-        self.pcm_buffer_bytes = RTP_BYTES_PER_FRAME * 8
 
 cfg = Config()
 

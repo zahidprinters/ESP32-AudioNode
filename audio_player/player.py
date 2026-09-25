@@ -194,7 +194,7 @@ class Player:
                         volume=self._volume)
 
     def _af_chain(self, vol: float) -> str:
-        """ffmpeg chain tuned to the measured speaker (logs/2026-09-15_tone-diagnosis.md).
+        """ffmpeg chain tuned to the measured speaker (see config.py).
 
         highpass 65 Hz: song's 41 Hz sub-bass peak is unreproducible on this driver
         and only eats headroom / causes mid intermodulation. Gentle bass shelf:

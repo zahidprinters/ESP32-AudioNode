@@ -1,84 +1,103 @@
-﻿# WORKFLOW SYSTEM (mandatory — read .cline/rules/workflow.md and PROJECT_STATE.md before ANY task)
-# Update PROJECT_STATE.md with micro-level detail after every change, build, flash, and test.
-# Minimal change → build → flash → log → verify → commit (only if verified on hardware).
-# Commit only verified working states; if a fix fails, log it and try a different approach.
-# Verify milestones in order: serial tone → WiFi → RTP UDP receiver → streaming. Use PC mic for audio verification.
+# ESP32 AudioNode — project facts (single source of truth)
 
-# ESP32 AUDIO NODE — ESSENTIALS (single source of truth)
+Read this and [`workflow.md`](workflow.md) before any task. Process lives in
+`workflow.md`; this file is only what is true about *this* project.
 
-## ESP-IDF (installed, use this — not Arduino)
-- **IDF v6.1 at `D:\esp32\v6.1\esp-idf`** (current, verified)
-- Tools/env at `C:\Espressif\tools` (v6.1: xtensa-esp-elf, python venv v6.1)
-- Environment (Windows, canonical):
-  ```powershell
-  . D:\esp-idf\tools\env.ps1
-  ```
-  `env.ps1` sets IDF_PATH, toolchain, Python venv, CCACHE, ESP_IDF_VERSION — it mirrors
-  `C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1` (the official EIM profile).
-  `export.bat` from the IDF tree does NOT work (EIM install layout is different).
-- Build commands (from `d:\esp-idf\firmware`):
+## Toolchain (this machine)
+
+- **ESP-IDF v6.1** at `D:\esp32\v6.1\esp-idf`; tools at `C:\Espressif\tools`
+  (EIM install — `export.bat` does **not** work, the layout differs).
+- Environment: `. D:\esp-idf\tools\env.ps1` from the repo root.
+- Build from `d:\esp-idf\firmware`:
+
   ```powershell
   idf.py set-target esp32s3
   idf.py build
-  idf.py -p COM5 flash        (if it can't connect: hold BOOT, tap RESET, release BOOT)
+  idf.py -p COM5 flash
   idf.py -p COM5 monitor --no-reset
   ```
-- COM5 = board (USB Serial Device). COM3 = Intel AMT motherboard port — NEVER use.
-- Board quirk: USB CDC console sometimes dies after flashing → unplug/replug USB fixes it.
-  If board shows "waiting for download" → unplug/replug USB (no buttons).
-  Or: with COM5 free, `python -m esptool --chip esp32s3 -p COM5 run` then `idf.py -p COM5 monitor --no-reset`.
-- Zombie senders/monitors poison tests — ALWAYS `taskkill /F /IM python.exe /T` before each test.
+
+- **COM5 = the board** (USB Serial Device). **COM3 = Intel AMT — never use it.**
+- Quirk: the USB CDC console sometimes dies after flashing; unplug/replug USB fixes it.
+  `waiting for download` → unplug/replug, no buttons. If the monitor will not attach:
+  `python -m esptool --chip esp32s3 -p COM5 run`, then attach the monitor (sequentially —
+  never both at once).
+- A stale sender or monitor poisons every test. `taskkill /F /IM python.exe /T` first.
 
 ## Hardware
-- Board: ESP32-S3-DevKitC-1-N8R2 (8MB flash, 8MB octal PSRAM)
-- Amp: MAX98357A (mono, 3W class-D). Speaker on amp OUT+/OUT-
 
-## Pin connections (unchanged — verified working)
-| MAX98357A | ESP32-S3 |
-|-----------|----------|
-| BCLK      | GPIO 4   |
-| LRC       | GPIO 5   |
-| DIN       | GPIO 6   |
-| SD        | GPIO 15  (driven HIGH = amp enabled) |
-| VIN       | 5V       |
-| GND       | GND      |
+- Board: **ESP32-S3-DevKitC-1-N8R2** (8 MB flash, 8 MB octal PSRAM — the jitter ring
+  lives in PSRAM, so it is not optional).
+- Amp: **MAX98357A**, mono 3 W class-D, speaker on **OUT+/OUT−** (never to ground).
+- No MCLK needed — the amp derives its clock. With SD at VDD it sits at minimum gain
+  (3 dB), which is why the board applies **×2 digital gain** and the sender limits to a
+  0.5 ceiling.
 
-If powering the amp from a separate 5 V supply, **tie the supply GND to the board GND**.
-If the SD pin is left at VDD, the MAX98357A is at its minimum gain (3 dB) — digital gain x2 (+6 dB) on the board compensates.
+| MAX98357A | ESP32-S3 | | |
+|---|---|---|---|
+| BCLK | GPIO 4 | RGB LED | GPIO 48 |
+| LRC | GPIO 5 | BOOT | GPIO 0 |
+| DIN | GPIO 6 | | |
+| SD | GPIO 15 (HIGH = enabled) | | |
+| VIN | 5 V | | |
+| GND | GND | | |
 
-## Setup & config
-- First boot / factory reset → board runs setup AP `AudioNode-Setup` (open, no password).
-- Connect to the AP → open http://192.168.4.1 → enter WiFi SSID/password + server IP + port → Save & Connect.
-- Board saves to NVS → joins WiFi → starts RTP listener on 1234. Failure within ~30 s → stays in setup AP (NVS kept).
-- Factory reset: hold BOOT (GPIO0) ~5 s after power-on → erase NVS → reboot to setup AP.
-- WiFi drop does NOT erase NVS — board auto-reconnects, LED turns red.
+A separate 5 V supply for the amp **must** share ground with the board.
 
-## Audio format
-- 48000 Hz, 16-bit, MONO, I2S Philips standard, no MCLK (amp derives it)
-- Transport: **RTP L16 over UDP** (PT=96, 48 kHz, 16-bit, mono, 20 ms frames, ts +960/frame in samples)
+## Setup and configuration
 
-## Network (values shown are placeholders — use your own)
-- WiFi SSID / password: provisioned at runtime through the setup AP; never commit them
-- Board IP (STA mode): assigned by your router's DHCP — read it from the serial log
-- UDP port 1234 — sender sends RTP to board :1234
-- Board = UDP listener (server sends TO the board)
+- First boot or factory reset → open setup AP `AudioNode-Setup`, portal at
+  <http://192.168.4.1> (also serves `/debug` as JSON while the AP is up).
+- The portal stores Wi-Fi SSID/password, server IP, port (default 1234) and node name
+  in NVS. The server IP is the source-IP whitelist for incoming datagrams.
+- No IP within ~30 s → back to the setup AP, NVS kept. Reconnect the phone/PC to the
+  real LAN afterwards.
+- Factory reset: hold **BOOT** (GPIO 0) ~5 s after power-on → NVS erased → setup AP.
+- **Wi-Fi loss never erases NVS**; the board retries and the LED goes red.
+- The config blob is versioned (`CFG_VERSION` 3): newer firmware rejects a stale blob
+  once and re-provisions.
 
-## Proven facts (do not re-litigate)
-- Max98357A needs no MCLK; SD HIGH = enabled; VIN on 5V
-- I2S pump must be real-time rate-limited (never spin); WiFi power-save OFF
-- Jitter buffer in PSRAM; flush on stream end so audio stops promptly
-- Clean tone verified via mic test (tone/noise ratio ~99x)
-- UDP/RTP is the production transport: validate every datagram (v=2, PT=96, source IP whitelist, seq/ts); silence-fill on loss; never block I2S waiting for a missing packet
-- Board = UDP listener (server sends TO the board); source IP validated against configured server IP
+## Audio and transport
 
-## Documentation references
-- `README.md` — project overview, hardware, quick start, proven building blocks
-- `ARCHITECTURE.md` — full data flow, RTP protocol spec, packet validation, loss handling, I2S byte-order, WiFi modes, factory reset, multi-node
-- `SETUP.md` — server-side setup (Windows/Mac/Linux), sender usage (file/loop/tone), VLC alternative, firewall, multi-node
-- `GUIDELINES.md` — toolchain, build/flash/test loop, commit policy, file hygiene, anti-patterns, TCP archive
-- `PROJECT_STATE.md` — live status, feature map, verified working, tried-and-failed, decisions, next steps
+- 48 000 Hz, 16-bit, **mono**, I2S Philips standard, no MCLK.
+- **RTP L16 over UDP**, PT 96, 20 ms frames = 960 samples = 1920 bytes; `seq` +1 and
+  `ts` +960 (samples) per frame; SSRC random per sender.
+- **The board is the listener** (the server sends to it). Datagrams from any source IP
+  other than the configured server are dropped.
+- Validated per datagram: length, RTP version, PT, payload size, source IP, seq/ts
+  continuity. Loss is silence-filled; the I2S task never waits for a packet.
+- LED: red = Wi-Fi down, blue breathing = waiting, VU = streaming (by packet recency,
+  not a sticky flag).
 
-## Session protocol (before any change)
-1. READ `PROJECT_STATE.md` — know what exists, what failed, what's next.
-2. Make the smallest possible change. One idea per build.
-3. Build (`idf.py build`), flash (`idf.py -p COM5 flash`), test, log to `logs/`, commit only if verified on hardware.
+## Proven — do not re-litigate
+
+- The MAX98357A needs no MCLK; SD HIGH = enabled; VIN on 5 V.
+- The I2S pump must be DMA-backpressure driven, never a fixed sleep, never a spin.
+- Wi-Fi power-save OFF. Jitter ring in PSRAM, flushed when a stream ends.
+- Boot tone verified by PC microphone: tone/noise ratio ~99x.
+- 1932-byte datagrams exceed the MTU, so `CONFIG_LWIP_IP4_REASSEMBLY` and
+  `CONFIG_LWIP_IP_REASS_MAX_PBUFS=20` in `sdkconfig.defaults` are mandatory, not tuning.
+- The board's saved server IP must equal the PC running the app.
+
+## Credentials
+
+Wi-Fi SSID/password are provisioned at runtime into NVS and are **never** committed.
+Board IPs are DHCP-assigned — read them from the serial log, and prefer DHCP
+reservations. Documentation uses placeholders (`<board-ip>`, `192.168.1.x`).
+
+## Where things are
+
+| Path | What |
+|---|---|
+| `firmware/main/main.c` | the whole board application |
+| `firmware/sdkconfig.defaults` | PSRAM + IP reassembly (load-bearing) |
+| `audio_player/player.py` | the one ffmpeg → RTP L16/UDP pipeline |
+| `audio_player/app.py` | Flask + Socket.IO server and scheduler |
+| `audio_player/selftest.py` | the runnable check — no test framework |
+| `audio_player/send_pcm.py` | bench CLI sender (tone / file / loop) |
+| `docs/PROJECT_STATE.md` | verified / failed / decided / next |
+| `docs/ARCHITECTURE.md` | data flow, wire format, validation, LED, Wi-Fi modes |
+| `docs/SETUP.md` | server setup, CLI usage, EQ, multi-node, firewall |
+| `docs/GUIDELINES.md` | human development rules |
+| `logs/` | git-ignored session scratch |
+| `tmp/` | git-ignored experiments |
