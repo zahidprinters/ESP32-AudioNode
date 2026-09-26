@@ -83,8 +83,12 @@ one before the next.
 
 - Commit only states that were actually verified: firmware must have been flashed and
   observed; the app must have been started and exercised.
-- Firmware: `M<x>: <what works> (verified on hardware)`. App:
-  `M<x>: <what works> (verified)`.
+- Subject line: `<type>: <what works> (verified)`, where type is one of `feat`,
+  `fix`, `ui`, `docs`, `chore`. Put the hardware qualifier in the subject only when
+  the change actually had it: `(verified on hardware)` for firmware, `(verified)`
+  for everything else.
+- The body states what changed, why, and what was run. A commit that only says
+  "fixed it" is not acceptable history.
 - A failed attempt is documented in [PROJECT_STATE](PROJECT_STATE.md) §4/§5, then a
   *different* approach is tried. Never commit a broken state to tidy the log.
 

@@ -111,8 +111,15 @@ your own ESP-IDF environment.
 ```powershell
 python -m compileall -q audio_player     # syntax
 python -m audio_player.selftest          # wire format, pacing, EQ, UI contract
-python -m pip check
 ```
+
+`selftest` is the gate: it exits non-zero on failure and also proves the three
+dependency lists (`deps.py`, `requirements.txt`, `pyproject.toml`) agree.
+
+Do **not** use `python -m pip check` as a project gate. It reports the whole
+interpreter, so unrelated packages (e.g. `esphome` and `platformio` disagreeing
+about `click`) fail it on a machine that shares Python with other tools, while
+saying nothing about this project. Inside a dedicated `.venv` it is meaningful.
 
 These do not replace listening to the speaker and reading the serial log.
 
@@ -122,7 +129,8 @@ These do not replace listening to the speaker and reading the serial log.
 firmware/      ESP-IDF source for the board (main/main.c holds the whole application)
 audio_player/  the PC server: web app, RTP pipeline, library scan, self-check
 tools/         ESP-IDF environment helper for this machine
-docs/          architecture, setup, development guidelines, project state
+docs/          architecture, function map, setup, guidelines, project state
+memory-bank/   project memory: what was decided, what was tried, what is next
 logs/          local session logs (git-ignored scratch)
 ```
 

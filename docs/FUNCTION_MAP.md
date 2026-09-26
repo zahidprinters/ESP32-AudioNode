@@ -130,7 +130,7 @@ defaults in place rather than raising.
 | `send_pcm.file_mode` | Decode and stream a file in real time | — |
 | `send_pcm.loop_mode` | Capture the Windows WASAPI loopback device and stream it | — |
 | `selftest.check` | Record one check, printing OK or FAIL | — |
-| `selftest.test_*` | The runnable checks: modules import, RTP header, frame math, pacing, position, EQ, dependencies, UI contract, config | — |
+| `selftest.test_*` | The runnable checks: modules import, RTP header, frame math, pacing, position, EQ, dependencies, UI element-id contract, stylesheet coverage, config | — |
 | `selftest.main` | Run every check; **exit 1 if any failed** | `int` exit code |
 
 ## Where to change what

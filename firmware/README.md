@@ -32,7 +32,7 @@ ESP-IDF v6.1 is assumed. On Windows this repository ships `env.ps1` at the root,
 which sets `IDF_PATH`, the toolchain and the Python venv:
 
 ```powershell
-. D:\esp-idf\tools\env.ps1
+. tools\env.ps1                  # from the repository root
 cd firmware
 idf.py set-target esp32s3        # first time only
 idf.py build

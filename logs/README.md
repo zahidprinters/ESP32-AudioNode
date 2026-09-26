@@ -1,7 +1,7 @@
 # logs/
 
-Local development logs. **Nothing in this folder is tracked by git** — see
-`.gitignore` (`logs/*`, with this README kept via `!logs/README.md`).
+Local development logs. **Nothing in this folder is tracked by git except this
+README** — see `.gitignore` (`logs/*`, with this file kept via `!logs/README.md`).
 
 ## Why it is not committed
 

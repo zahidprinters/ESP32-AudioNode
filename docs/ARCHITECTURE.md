@@ -1,8 +1,45 @@
 # Architecture — AudioNode WiFi speaker box
 
-## Product concept
+## Purpose
 
 A configurable, networkable speaker: an ESP32-S3 board with a MAX98357A class-D amp, plus an onboard WS2812 RGB LED. Drop it on any WiFi, point it at a server, and it plays PCM audio over RTP/UDP. Multiple boards can share one server stream.
+
+## Stack
+
+| Layer | Technology | Version | Notes |
+|---|---|---|---|
+| Board | ESP32-S3-DevKitC-1-N8R2 | — | 8 MB flash, 8 MB octal PSRAM; the jitter ring lives in PSRAM |
+| Firmware | ESP-IDF | 6.1 | C, FreeRTOS; target `esp32s3`; the whole app is `firmware/main/main.c` |
+| Component | `espressif/led_strip` | ^3.0.0 | the WS2812 driver, pinned by `dependencies.lock` |
+| Amplifier | MAX98357A | — | I2S in, speaker out; no MCLK, 3 dB minimum gain |
+| Server | Python + Flask + Flask-SocketIO | 3.11+ | `audio_player/`; threading mode, no eventlet |
+| Decode | ffmpeg via `imageio-ffmpeg` | — | static binary, nothing installed system-wide |
+| Transport | RTP L16 over UDP | PT 96 | the one interface between the two halves |
+
+## Layout
+
+| Path | What it holds |
+|---|---|
+| `firmware/` | ESP-IDF project for the board; `main/main.c` is the entire application |
+| `audio_player/` | the PC server: web app, RTP pipeline, library scan, bench sender, self-check |
+| `tools/env.ps1` | ESP-IDF environment for one specific Windows install |
+| `docs/` | architecture, function map, setup, guidelines, project state |
+| `logs/` | git-ignored session scratch plus `app.log` |
+| `tmp/` | git-ignored experiments |
+
+The two halves share nothing but the wire format. Firmware code stays in
+`firmware/`, server code stays in `audio_player/`.
+
+## Key modules
+
+| Module | Responsibility |
+|---|---|
+| `firmware/main/main.c` | everything the board does: config, Wi-Fi, portal, RTP receive, ring, I2S, LED |
+| `audio_player/player.py` | the single ffmpeg → RTP L16/UDP pipeline: pacing, filter chain, seek |
+| `audio_player/app.py` | Flask + Socket.IO: REST routes, WebSocket pushes, scheduler, discovery |
+| `audio_player/config.py` | every tunable plus the nodes / EQ / settings persistence |
+| `audio_player/selftest.py` | the runnable check; exits non-zero on failure |
+| `audio_player/deps.py` | the dependency contract, verified on every entry point |
 
 ## Data flow (end to end)
 

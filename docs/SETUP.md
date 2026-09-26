@@ -18,7 +18,7 @@ Both drive the same ffmpeg → RTP L16 → UDP pipeline. VLC is documented as an
 ## Browser app (recommended)
 
 ```powershell
-cd d:\esp-idf
+# from the repository root
 python -m audio_player.app            # UI at http://localhost:5000
 ```
 
@@ -43,9 +43,11 @@ EQ chain invariants and the UI's element-ID contract.
 ## Prerequisites
 
 - Python 3.11+ (the tested version; `pyproject.toml` requires it)
-- ffmpeg (for file mode) — the `imageio-ffmpeg` pip package gives you a static ffmpeg binary with no system install
-- numpy (for tone mode + some processing)
-- On Windows only: `pyaudiowpatch` (PyAudio fork with WASAPI loopback) for capturing PC speaker output
+- ffmpeg for file mode — the `imageio-ffmpeg` pip package supplies a static binary, so
+  nothing needs to be installed system-wide
+- Windows loopback mode **only** (the CLI sender's `loop` submode): `numpy` and
+  `pyaudiowpatch`. Tone and file mode need neither, and the self-check asserts that
+  `numpy` is not a dependency of the server.
 
 ## Install (all platforms)
 
@@ -72,7 +74,7 @@ Or read it from the setup web page if the board shows it there.
 
 ## Usage (CLI sender)
 
-Run from the repository root (`d:\esp-idf`):
+Run from the repository root:
 
 ```bash
 python audio_player\send_pcm.py file  <path>  <board_ip> [port] [vol]

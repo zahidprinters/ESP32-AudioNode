@@ -23,6 +23,8 @@ is in flight. The open items are packaging and product decisions, in §8.
 | Persistence | `audio_player/config.py` | complete — nodes, EQ, settings and schedules (write-then-replace) |
 | Bench sender | `audio_player/send_pcm.py` | complete — tone / file / loopback modes |
 | Self-check | `audio_player/selftest.py` | complete — no framework, exits non-zero on failure |
+| Dependency check | `audio_player/deps.py` | complete — one list, verified on every entry point |
+| Windows launcher | `audio_player/start_audioplayer.bat` | complete — one-click start, clean stop |
 | Auto-start | `audio_player/install_startup.ps1` | complete — Windows scheduled task, optional `-AtStartup` |
 | Packaging / installer | — | **not started** (§8) |
 

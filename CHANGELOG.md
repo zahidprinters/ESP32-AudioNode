@@ -5,7 +5,67 @@ Format: latest first. Each entry maps to a git commit. See each doc file (README
 
 ---
 
-## [unreleased] — RTP/UDP product phase
+## 2026-09-26 — Project-wide documentation audit
+
+Documentation only; **no code changed**. Every claim below was checked against the
+source, not against another document.
+
+- **The memory bank was actively dangerous.** `memory-bank/techContext.md` said to
+  flash with `idf.py -p COM3 flash` — that is the Intel AMT motherboard port, which
+  every other document says to never use. The board is **COM5**. It also named the
+  wrong toolchain (**ESP-IDF 5.3.2** at `D:\esp32-tools\esp-idf` instead of the
+  **6.1** this project actually builds with, confirmed by
+  `CONFIG_IDF_INIT_VERSION="6.1.0"` in `sdkconfig`), and the wrong PSRAM size
+  (**2 MB** instead of the board's **8 MB octal**, pinned by
+  `CONFIG_SPIRAM_MODE_OCT=y`). A command that does not exist
+  (`python -m audio_player.send_pcm --tone`) was also listed. All corrected against
+  `tools/env.ps1` and the real `sdkconfig`.
+- **`memory-bank/progress.md` overcounted the commit history** — it claimed 6
+  identities with 4 fabricated. `git shortlog -sne --all` shows **3**, of which
+  **2** are fabricated placeholders. Milestone dates were 2026-09-08; the commits
+  are 2026-09-25.
+- **`docs/SETUP.md` told people to install numpy for tone mode.** It is not used
+  there, and `selftest` actively asserts that `numpy` is neither imported nor
+  required by the server. It is needed only for the CLI's Windows loopback mode.
+  The prerequisites list now says that.
+- **`README.md` recommended `python -m pip check` as a project check. It fails on
+  this machine** — not because of this project, but because `esphome` and
+  `platformio` (unrelated tools sharing the interpreter) disagree about `click`.
+  A gate that fails for reasons outside the project trains people to ignore it, so
+  it is replaced with a note explaining when it *is* meaningful (inside a dedicated
+  `.venv`).
+- **`CHANGELOG.md` had a duplicated heading** — `### Audit register + roadmap` twice
+  in a row, an editing accident that left the entry with no title. Fixed. The stale
+  `[unreleased] — RTP/UDP product phase` banner is now a dated, closed heading:
+  that phase finished on 2026-09-25.
+- **`docs/ARCHITECTURE.md` gained the sections a map is supposed to have** —
+  Purpose, Stack (with versions), Layout, Key modules. It had a data-flow diagram
+  and protocol detail but never said what the project was *made of*.
+- **Absolute paths removed from instructions people copy and paste**:
+  `docs/SETUP.md` said `cd d:\esp-idf`, `firmware/README.md` and the agent rules
+  pinned `. D:\esp-idf\tools\env.ps1`. They now use the relative form, matching the
+  root README. What remains is legitimate: the ESP-IDF install location (inherent
+  to a machine-specific toolchain), historical CHANGELOG entries, and the
+  `D:\Music` example folder.
+- **Two stale statements corrected**: `docs/GUIDELINES.md` still mandated the dead
+  `M<x>:` commit format (the repo has used `<type>:` for a while);
+  `docs/PROJECT_STATE.md` §2 omitted `deps.py` and `start_audioplayer.bat` from the
+  feature map. `README.md` and the agent rules now list `memory-bank/`.
+- **`.gitignore` closed the gaps the project standard names** — `temp/`,
+  `test-results/`, `.playwright-mcp/` and `.pytest_cache/`.
+- **`memory-bank/` is now tracked.** It was untracked, which meant the project
+  memory that exists to survive sessions died with the working tree.
+
+Tested: `python -m audio_player.selftest` → **57/57 pass, exit 0**;
+`python -m compileall -q audio_player` → exit 0; `node --check app.js` → exit 0;
+a repository-wide absolute-path grep and a markdown link-target check (0 broken).
+
+Not tested: nothing was flashed and no audio was played. No firmware, no server
+code and no wire format was touched, so no hardware verification was warranted.
+
+---
+
+## 2026-09-25 — RTP/UDP product phase (complete)
 
 ### UI: app shell with a sidebar and a hamburger (2026-09-25)
 
@@ -251,8 +311,6 @@ Documentation and dead-weight removal only; no behaviour change.
 - **PC app fix**: `socketio.run(..., allow_unsafe_werkzeug=True)` in `app.py`
   so the LAN dev server starts under current Flask-SocketIO (Werkzeug guard).
   Documented in `audio_player/README.md`; not a production deploy.
-
-### Audit register + roadmap (2026-09-19)
 
 ### Audit register + roadmap (2026-09-19)
 - **`docs/AUDIT.md` added** — living register of external code reviews. Every reported item

@@ -7,8 +7,8 @@ Read this and [`workflow.md`](workflow.md) before any task. Process lives in
 
 - **ESP-IDF v6.1** at `D:\esp32\v6.1\esp-idf`; tools at `C:\Espressif\tools`
   (EIM install — `export.bat` does **not** work, the layout differs).
-- Environment: `. D:\esp-idf\tools\env.ps1` from the repo root.
-- Build from `d:\esp-idf\firmware`:
+- Environment: `. tools\env.ps1` from the repo root.
+- Build from the `firmware/` directory:
 
   ```powershell
   idf.py set-target esp32s3
@@ -100,5 +100,6 @@ reservations. Documentation uses placeholders (`<board-ip>`, `192.168.1.x`).
 | `docs/ARCHITECTURE.md` | data flow, wire format, validation, LED, Wi-Fi modes |
 | `docs/SETUP.md` | server setup, CLI usage, EQ, multi-node, firewall |
 | `docs/GUIDELINES.md` | human development rules |
+| `memory-bank/` | project memory: decisions, attempts, next steps |
 | `logs/` | git-ignored session scratch |
 | `tmp/` | git-ignored experiments |
